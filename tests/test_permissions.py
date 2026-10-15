@@ -130,3 +130,74 @@ def test_check_permission_apply_budget_change_returns_false():
     assert check_permission("unregistered_tool") is False
     assert TOOL_TIERS["apply_budget_change"] == Tier.APPLY
     assert TOOL_TIERS["propose_budget_change"] == Tier.PROPOSE
+
+
+def test_model_cannot_trigger_apply_budget_change(temp_budget_env, monkeypatch):
+    """Test 3: Model attempting to call apply_budget_change is blocked by permissions.
+
+    3.1) Assert the tool response result is {"error": "This action is not permitted."}.
+    3.2) Assert input was never called, using a mock.
+    3.3) Assert budgets.json is unchanged.
+    """
+    from unittest.mock import MagicMock
+    from google.genai import types
+    from src.agent import run_agent
+
+    temp_budgets, temp_proposals = temp_budget_env
+    budgets_before = temp_budgets.read_text(encoding="utf-8")
+
+    # Propose a valid change first to have a valid proposal ID
+    res = tools_module.propose_budget_change("Dining", 50.0)
+    proposal_id = json.loads(res)["proposal_id"]
+
+    # Mock input to ensure it is never called
+    mock_input = MagicMock()
+    monkeypatch.setattr("builtins.input", mock_input)
+
+    class MockFunctionCall:
+        name = "apply_budget_change"
+        args = {"proposal_id": proposal_id}
+
+    class MockResponse1:
+        candidates = [MagicMock(content=types.Content(role="model", parts=[]))]
+        function_calls = [MockFunctionCall()]
+        text = None
+
+    class MockResponse2:
+        candidates = [MagicMock(content=types.Content(role="model", parts=[]))]
+        function_calls = []
+        text = '{"error": "This action is not permitted."}'
+
+    captured_tool_results = []
+    call_count = 0
+
+    def mock_generate_content(model, contents, config):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return MockResponse1()
+        else:
+            # Capture the tool response sent back in conversation history
+            last_msg = contents[-1]
+            for part in last_msg.parts:
+                if part.function_response:
+                    captured_tool_results.append(part.function_response.response)
+            return MockResponse2()
+
+    mock_client = MagicMock()
+    mock_client.models.generate_content.side_effect = mock_generate_content
+    monkeypatch.setattr("src.agent.genai.Client", lambda api_key=None: mock_client)
+
+    run_agent("Apply the budget change proposal")
+
+    # 3.1) Assert the result is {"error": "This action is not permitted."}
+    assert len(captured_tool_results) == 1
+    assert captured_tool_results[0] == {"error": "This action is not permitted."}
+
+    # 3.2) Assert input was never called
+    mock_input.assert_not_called()
+
+    # 3.3) Assert budgets.json is unchanged
+    budgets_after = temp_budgets.read_text(encoding="utf-8")
+    assert budgets_before == budgets_after
+

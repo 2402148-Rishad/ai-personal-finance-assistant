@@ -287,7 +287,11 @@ def propose_budget_change(category: str, new_limit: float) -> str:
         if PROPOSALS_PATH.exists():
             try:
                 with open(PROPOSALS_PATH, "r", encoding="utf-8") as f:
-                    proposals = json.load(f)
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        proposals = data
+                    elif isinstance(data, list):
+                        proposals = {p["id"]: p for p in data if isinstance(p, dict) and "id" in p}
             except Exception:
                 proposals = {}
 
@@ -322,7 +326,13 @@ def apply_budget_change(proposal_id: str) -> str:
             return json.dumps({"error": f"No pending proposals file found at {PROPOSALS_PATH}."})
 
         with open(PROPOSALS_PATH, "r", encoding="utf-8") as f:
-            proposals = json.load(f)
+            data = json.load(f)
+            if isinstance(data, dict):
+                proposals = data
+            elif isinstance(data, list):
+                proposals = {p["id"]: p for p in data if isinstance(p, dict) and "id" in p}
+            else:
+                proposals = {}
 
         if proposal_id not in proposals:
             return json.dumps({"error": f"Proposal '{proposal_id}' not found."})
