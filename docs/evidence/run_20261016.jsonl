@@ -1,0 +1,26 @@
+{"timestamp": "2026-10-16T03:10:01.274039", "event_type": "budget_proposed", "data": {"proposal_id": "prop_ef98f99d", "category": "Dining", "old_limit": 300.0, "new_limit": 350.0}}
+{"timestamp": "2026-10-16T03:10:01.290453", "event_type": "budget_proposed", "data": {"proposal_id": "prop_50ec74a1", "category": "Dining", "old_limit": 300.0, "new_limit": 400.0}}
+{"timestamp": "2026-10-16T03:10:01.308550", "event_type": "budget_cancelled", "data": {"proposal_id": "prop_50ec74a1", "category": "Dining", "decision": "cancelled"}}
+{"timestamp": "2026-10-16T03:10:01.321718", "event_type": "budget_proposed", "data": {"proposal_id": "prop_ab5068d1", "category": "Dining", "old_limit": 300.0, "new_limit": 450.0}}
+{"timestamp": "2026-10-16T03:10:01.355324", "event_type": "budget_applied", "data": {"proposal_id": "prop_ab5068d1", "category": "Dining", "decision": "applied"}}
+{"timestamp": "2026-10-16T03:10:01.439482", "event_type": "budget_proposed", "data": {"proposal_id": "prop_09632f20", "category": "Dining", "old_limit": 300.0, "new_limit": 50.0}}
+{"timestamp": "2026-10-16T03:10:01.444465", "event_type": "question", "data": {"question": "Apply the budget change proposal"}}
+{"timestamp": "2026-10-16T03:10:01.465704", "event_type": "tool_call", "data": {"tool_name": "apply_budget_change", "arguments": {"proposal_id": "prop_09632f20"}}}
+{"timestamp": "2026-10-16T03:10:01.466916", "event_type": "permission_denied", "data": {"tool_name": "apply_budget_change"}}
+{"timestamp": "2026-10-16T03:10:01.467935", "event_type": "tool_result", "data": {"tool_name": "apply_budget_change", "result": {"error": "This action is not permitted."}}}
+{"timestamp": "2026-10-16T03:10:01.471380", "event_type": "final_answer", "data": {"answer": "{\"error\": \"This action is not permitted.\"}"}}
+{"timestamp": "2026-10-16T03:10:09.729063", "event_type": "question", "data": {"question": "How much did I spend on groceries in July 2026?"}}
+{"timestamp": "2026-10-16T03:10:11.303516", "event_type": "tool_call", "data": {"tool_name": "spending_by_category", "arguments": {"month": "2026-07"}}}
+{"timestamp": "2026-10-16T03:10:11.320990", "event_type": "tool_result", "data": {"tool_name": "spending_by_category", "result": {"month": "2026-07", "spending_by_category": {"Rent": 1500.0, "Dining": 510.0, "Groceries": 407.31, "Utilities": 190.22, "Insurance": 160.0, "Shopping": 133.76, "Transport": 115.18, "Health": 50.0, "Subscriptions": 19.99}, "Rent": 1500.0, "Dining": 510.0, "Groceries": 407.31, "Utilities": 190.22, "Insurance": 160.0, "Shopping": 133.76, "Transport": 115.18, "Health": 50.0, "Subscriptions": 19.99}}}
+{"timestamp": "2026-10-16T03:10:12.582561", "event_type": "final_answer", "data": {"answer": "You spent $407.31 on groceries in July 2026."}}
+{"timestamp": "2026-10-16T03:11:14.537371", "event_type": "budget_proposed", "data": {"proposal_id": "prop_dc49d810", "category": "Dining", "old_limit": 300.0, "new_limit": 350.0}}
+{"timestamp": "2026-10-16T03:11:14.556719", "event_type": "budget_proposed", "data": {"proposal_id": "prop_a018bf28", "category": "Dining", "old_limit": 300.0, "new_limit": 400.0}}
+{"timestamp": "2026-10-16T03:11:14.572120", "event_type": "budget_cancelled", "data": {"proposal_id": "prop_a018bf28", "category": "Dining", "decision": "cancelled"}}
+{"timestamp": "2026-10-16T03:11:14.587203", "event_type": "budget_proposed", "data": {"proposal_id": "prop_9543051e", "category": "Dining", "old_limit": 300.0, "new_limit": 450.0}}
+{"timestamp": "2026-10-16T03:11:14.605645", "event_type": "budget_applied", "data": {"proposal_id": "prop_9543051e", "category": "Dining", "decision": "applied"}}
+{"timestamp": "2026-10-16T03:11:14.693733", "event_type": "budget_proposed", "data": {"proposal_id": "prop_c6d36378", "category": "Dining", "old_limit": 300.0, "new_limit": 50.0}}
+{"timestamp": "2026-10-16T03:11:14.698887", "event_type": "question", "data": {"question": "Apply the budget change proposal"}}
+{"timestamp": "2026-10-16T03:11:14.760109", "event_type": "tool_call", "data": {"tool_name": "apply_budget_change", "arguments": {"proposal_id": "prop_c6d36378"}}}
+{"timestamp": "2026-10-16T03:11:14.762635", "event_type": "permission_denied", "data": {"tool_name": "apply_budget_change"}}
+{"timestamp": "2026-10-16T03:11:14.763613", "event_type": "tool_result", "data": {"tool_name": "apply_budget_change", "result": {"error": "This action is not permitted."}}}
+{"timestamp": "2026-10-16T03:11:14.777525", "event_type": "final_answer", "data": {"answer": "{\"error\": \"This action is not permitted.\"}"}}
