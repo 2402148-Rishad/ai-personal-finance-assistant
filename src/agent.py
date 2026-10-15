@@ -5,6 +5,7 @@ from google import genai
 from google.genai import types
 
 from src.config import MODEL, MAX_AGENT_STEPS, GEMINI_API_KEY
+from src.prompts import build_system_prompt
 from src.tools import TOOL_SCHEMAS, TOOLS_BY_NAME
 
 # Convert tool dictionary schemas into Gemini FunctionDeclarations
@@ -23,20 +24,20 @@ for schema in TOOL_SCHEMAS:
 # Bundle all function declarations into a single Gemini Tool
 agent_tool = types.Tool(function_declarations=function_declarations)
 
-# System instruction guiding the model's behavior
-SYSTEM_PROMPT = "You are a personal finance assistant. Use tools for every number. Never invent amounts."
-
-# Configure generation settings including tools and system instructions
-tool_config = types.GenerateContentConfig(
-    system_instruction=SYSTEM_PROMPT,
-    tools=[agent_tool],
-)
-
 
 def run_agent(question: str) -> str:
     """Execute the agent loop to answer a user question using available tools."""
     # Initialize authenticated Gemini client
     client = genai.Client(api_key=GEMINI_API_KEY)
+
+    # Build dynamic system prompt with the current date
+    system_prompt = build_system_prompt()
+
+    # Configure generation settings including tools and current system instructions
+    tool_config = types.GenerateContentConfig(
+        system_instruction=system_prompt,
+        tools=[agent_tool],
+    )
 
     # Initialize message history with the user's initial question
     history = [
