@@ -1,22 +1,26 @@
-"""Read-only financial analysis tools using pandas and JSON schemas for LLM tool calling."""
+"""Financial analysis and budget management tools using pandas and JSON schemas for LLM tool calling."""
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 import json
 from pathlib import Path
+import uuid
 import pandas as pd
 
 # Resolve paths relative to project root (finance_agent/)
 try:
-    from src.config import TRANSACTIONS_PATH, BILLS_PATH, BUDGETS_PATH
+    from src.config import TRANSACTIONS_PATH, BILLS_PATH, BUDGETS_PATH, PROJECT_ROOT
 except ImportError:
     try:
-        from config import TRANSACTIONS_PATH, BILLS_PATH, BUDGETS_PATH
+        from config import TRANSACTIONS_PATH, BILLS_PATH, BUDGETS_PATH, PROJECT_ROOT
     except ImportError:
         PROJECT_ROOT = Path(__file__).resolve().parent.parent
         DATA_DIR = PROJECT_ROOT / "data"
         TRANSACTIONS_PATH = DATA_DIR / "transactions.csv"
         BILLS_PATH = DATA_DIR / "bills.csv"
         BUDGETS_PATH = DATA_DIR / "budgets.json"
+
+LOGS_DIR = PROJECT_ROOT / "logs"
+PROPOSALS_PATH = LOGS_DIR / "pending_proposals.json"
 
 
 # ============================================================================
@@ -243,6 +247,130 @@ def find_possible_duplicates(month: str) -> str:
         return json.dumps({"error": str(e)})
 
 
+def propose_budget_change(category: str, new_limit: float) -> str:
+    """Propose a change to a budget category limit, saving to pending proposals without modifying budgets.json."""
+    try:
+        if not BUDGETS_PATH.exists():
+            return json.dumps({"error": f"Budgets file not found at {BUDGETS_PATH}"})
+
+        with open(BUDGETS_PATH, "r", encoding="utf-8") as f:
+            budgets = json.load(f)
+
+        # Validate that category exists in budgets.json
+        matched_cat = None
+        for cat in budgets.keys():
+            if cat.lower() == category.strip().lower():
+                matched_cat = cat
+                break
+
+        if not matched_cat:
+            return json.dumps({"error": f"Category '{category}' does not exist in budgets."})
+
+        # Validate that new_limit is a number greater than 0
+        try:
+            limit_val = float(new_limit)
+        except (ValueError, TypeError):
+            return json.dumps({"error": f"Invalid limit '{new_limit}'. Limit must be a number greater than 0."})
+
+        if limit_val <= 0:
+            return json.dumps({"error": f"New limit must be greater than 0. Received: {limit_val}"})
+
+        old_limit = float(budgets[matched_cat])
+        proposal_id = f"prop_{uuid.uuid4().hex[:8]}"
+        timestamp = datetime.now().isoformat()
+
+        # Ensure logs directory exists
+        LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Load existing pending proposals
+        proposals = {}
+        if PROPOSALS_PATH.exists():
+            try:
+                with open(PROPOSALS_PATH, "r", encoding="utf-8") as f:
+                    proposals = json.load(f)
+            except Exception:
+                proposals = {}
+
+        # Save proposal to logs/pending_proposals.json
+        proposals[proposal_id] = {
+            "id": proposal_id,
+            "category": matched_cat,
+            "old_limit": round(old_limit, 2),
+            "new_limit": round(limit_val, 2),
+            "timestamp": timestamp,
+        }
+
+        with open(PROPOSALS_PATH, "w", encoding="utf-8") as f:
+            json.dump(proposals, f, indent=2)
+
+        return json.dumps({
+            "proposal_id": proposal_id,
+            "category": matched_cat,
+            "old_limit": round(old_limit, 2),
+            "new_limit": round(limit_val, 2),
+            "status": "pending_confirmation",
+            "message": f"Proposal {proposal_id} created for {matched_cat}: change limit from ${old_limit:.2f} to ${limit_val:.2f}. User confirmation in terminal required.",
+        })
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+def apply_budget_change(proposal_id: str) -> str:
+    """Apply a pending budget proposal after user confirmation via terminal input. NEVER called by the model."""
+    try:
+        if not PROPOSALS_PATH.exists():
+            return json.dumps({"error": f"No pending proposals file found at {PROPOSALS_PATH}."})
+
+        with open(PROPOSALS_PATH, "r", encoding="utf-8") as f:
+            proposals = json.load(f)
+
+        if proposal_id not in proposals:
+            return json.dumps({"error": f"Proposal '{proposal_id}' not found."})
+
+        proposal = proposals[proposal_id]
+        category = proposal["category"]
+        old_limit = proposal["old_limit"]
+        new_limit = proposal["new_limit"]
+
+        print(f"\nProposal {proposal_id}:")
+        print(f"  Category:  {category}")
+        print(f"  Old Limit: ${old_limit:.2f}")
+        print(f"  New Limit: ${new_limit:.2f}")
+
+        user_choice = input("Type exactly 'yes' to confirm and apply this change: ").strip()
+
+        if user_choice == "yes":
+            # Load and update budgets.json
+            with open(BUDGETS_PATH, "r", encoding="utf-8") as f:
+                budgets = json.load(f)
+
+            budgets[category] = new_limit
+
+            with open(BUDGETS_PATH, "w", encoding="utf-8") as f:
+                json.dump(budgets, f, indent=2)
+
+            # Remove proposal from pending proposals file
+            del proposals[proposal_id]
+            with open(PROPOSALS_PATH, "w", encoding="utf-8") as f:
+                json.dump(proposals, f, indent=2)
+
+            return json.dumps({
+                "status": "applied",
+                "proposal_id": proposal_id,
+                "category": category,
+                "new_limit": new_limit,
+                "message": f"Successfully updated '{category}' budget to ${new_limit:.2f}.",
+            })
+        else:
+            return json.dumps({
+                "status": "cancelled",
+                "proposal_id": proposal_id,
+                "message": "Budget change cancelled by user. No files were modified.",
+            })
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
 # ============================================================================
 # JSON Schemas for LLM Tool Calling
 # ============================================================================
@@ -345,6 +473,41 @@ FIND_POSSIBLE_DUPLICATES_SCHEMA = {
     },
 }
 
+PROPOSE_BUDGET_CHANGE_SCHEMA = {
+    "name": "propose_budget_change",
+    "description": "Proposes a change to a category spending limit. Does not apply the change; generates a pending proposal that requires user confirmation in the terminal. Arguments: category (string), new_limit (positive number). Result: JSON containing proposal_id, category, old_limit, and new_limit.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "category": {
+                "type": "string",
+                "description": "The budget category to update (e.g., 'Dining').",
+            },
+            "new_limit": {
+                "type": "number",
+                "description": "The proposed new monthly spending limit in USD (must be > 0).",
+            },
+        },
+        "required": ["category", "new_limit"],
+    },
+}
+
+APPLY_BUDGET_CHANGE_SCHEMA = {
+    "name": "apply_budget_change",
+    "description": "Applies a pending budget proposal after interactive user terminal confirmation. Must never be called directly by the model. Arguments: proposal_id (string). Result: JSON status of applied or cancelled.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "proposal_id": {
+                "type": "string",
+                "description": "Unique identifier of the pending proposal to confirm.",
+            },
+        },
+        "required": ["proposal_id"],
+    },
+}
+
+# Only schemas sent to the model (apply_budget_change is excluded)
 TOOL_SCHEMAS = [
     GET_MONTHLY_SUMMARY_SCHEMA,
     SPENDING_BY_CATEGORY_SCHEMA,
@@ -352,6 +515,7 @@ TOOL_SCHEMAS = [
     UPCOMING_BILLS_SCHEMA,
     BUDGET_STATUS_SCHEMA,
     FIND_POSSIBLE_DUPLICATES_SCHEMA,
+    PROPOSE_BUDGET_CHANGE_SCHEMA,
 ]
 
 TOOLS_BY_NAME = {
@@ -361,4 +525,6 @@ TOOLS_BY_NAME = {
     "upcoming_bills": upcoming_bills,
     "budget_status": budget_status,
     "find_possible_duplicates": find_possible_duplicates,
+    "propose_budget_change": propose_budget_change,
+    "apply_budget_change": apply_budget_change,
 }

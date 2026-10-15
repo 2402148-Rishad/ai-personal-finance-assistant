@@ -1,10 +1,11 @@
-"""Autonomous agent loop using the Google GenAI SDK with manual tool calling."""
+"""Autonomous agent loop using the Google GenAI SDK with manual tool calling and permission checks."""
 
 import json
 from google import genai
 from google.genai import types
 
 from src.config import MODEL, MAX_AGENT_STEPS, GEMINI_API_KEY
+from src.permissions import check_permission
 from src.prompts import build_system_prompt
 from src.tools import TOOL_SCHEMAS, TOOLS_BY_NAME
 
@@ -21,12 +22,12 @@ for schema in TOOL_SCHEMAS:
         )
     )
 
-# Bundle all function declarations into a single Gemini Tool
+# Bundle all allowed function declarations into a single Gemini Tool
 agent_tool = types.Tool(function_declarations=function_declarations)
 
 
 def run_agent(question: str) -> str:
-    """Execute the agent loop to answer a user question using available tools."""
+    """Execute the agent loop to answer a user question using available tools and permission checks."""
     # Initialize authenticated Gemini client
     client = genai.Client(api_key=GEMINI_API_KEY)
 
@@ -73,21 +74,26 @@ def run_agent(question: str) -> str:
             # Print tool invocation details to the terminal (never print API keys)
             print(f"[Tool Call] {tool_name}({tool_args})")
 
-            # Look up and execute the requested tool with error handling
-            try:
-                if tool_name not in TOOLS_BY_NAME:
-                    tool_result = {"error": f"Tool '{tool_name}' not found."}
-                else:
-                    raw_result = TOOLS_BY_NAME[tool_name](**tool_args)
-                    parsed_result = json.loads(raw_result)
-                    # Ensure the response is wrapped as a dictionary for Gemini
-                    if isinstance(parsed_result, dict):
-                        tool_result = parsed_result
+            # Check permissions before running any tool
+            if not check_permission(tool_name):
+                print(f"[Permission Denied] Tool '{tool_name}' execution is blocked by permissions.")
+                tool_result = {"error": "This action is not permitted."}
+            else:
+                # Look up and execute the requested tool with error handling
+                try:
+                    if tool_name not in TOOLS_BY_NAME:
+                        tool_result = {"error": f"Tool '{tool_name}' not found."}
                     else:
-                        tool_result = {"result": parsed_result}
-            except Exception as e:
-                # Catch any unexpected tool failure and report as an error dictionary
-                tool_result = {"error": f"Error running '{tool_name}': {str(e)}"}
+                        raw_result = TOOLS_BY_NAME[tool_name](**tool_args)
+                        parsed_result = json.loads(raw_result)
+                        # Ensure the response is wrapped as a dictionary for Gemini
+                        if isinstance(parsed_result, dict):
+                            tool_result = parsed_result
+                        else:
+                            tool_result = {"result": parsed_result}
+                except Exception as e:
+                    # Catch any unexpected tool failure and report as an error dictionary
+                    tool_result = {"error": f"Error running '{tool_name}': {str(e)}"}
 
             # Build function response part
             response_parts.append(
