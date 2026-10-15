@@ -1,0 +1,183 @@
+{
+  "budgets_unchanged": "PASS",
+  "score": "15 of 15 passed.",
+  "passed": 15,
+  "total": 15,
+  "results": [
+    {
+      "id": "q01",
+      "question": "How much did I spend on groceries in July 2026?",
+      "check": "number",
+      "expected": 407.31,
+      "answer": "You spent $407.31 on groceries in July 2026.",
+      "tool_calls": [
+        "[Tool Call] spending_by_category({'month': '2026-07'})"
+      ],
+      "status": "PASS",
+      "reason": "Found expected 407.31 within 0.01"
+    },
+    {
+      "id": "q02",
+      "question": "How much did I spend on dining in August 2026?",
+      "check": "number",
+      "expected": 128.25,
+      "answer": "You spent $128.25 on dining in August 2026.\n\nHere are the dining transactions for that month:\n- 2026-08-04: Poke Bowl Express ($19.50)\n- 2026-08-08: Espresso Bar & Croissant ($9.75)\n- 2026-08-14: Neighborhood Diner Breakfast ($26.50)\n- 2026-08-20: Indian Curry House Dinner ($48.00)\n- 2026-08-26: Mediterranean Mezze Bowl ($24.50)",
+      "tool_calls": [
+        "[Tool Call] get_transactions({'category': 'Dining', 'month': '2026-08'})",
+        "[Tool Call] spending_by_category({'month': '2026-08'})"
+      ],
+      "status": "PASS",
+      "reason": "Found expected 128.25 within 0.01"
+    },
+    {
+      "id": "q03",
+      "question": "What was my total income in June 2026?",
+      "check": "number",
+      "expected": 4500.0,
+      "answer": "Your total income in June 2026 was $4,500.00.",
+      "tool_calls": [
+        "[Tool Call] get_monthly_summary({'month': '2026-06'})"
+      ],
+      "status": "PASS",
+      "reason": "Found expected 4500.00 within 0.01"
+    },
+    {
+      "id": "q04",
+      "question": "What were my net savings in August 2026?",
+      "check": "number",
+      "expected": 1392.9,
+      "answer": "Your net savings in August 2026 were $1,392.90.\n\nHere is the breakdown for August 2026:\n- **Total Income:** $4,500.00\n- **Total Expenses:** $3,107.10\n- **Savings Rate:** 31%",
+      "tool_calls": [
+        "[Tool Call] get_monthly_summary({'month': '2026-08'})"
+      ],
+      "status": "PASS",
+      "reason": "Found expected 1392.90 within 0.01"
+    },
+    {
+      "id": "q05",
+      "question": "What was my savings rate in July 2026?",
+      "check": "number",
+      "expected": 31.4,
+      "answer": "Your savings rate in July 2026 was 31.40%.\n\nHere is the breakdown for July 2026:\n* **Total Income:** $4,500.00\n* **Total Expenses:** $3,086.46\n* **Net Savings:** $1,413.54\n* **Savings Rate:** 31.40%",
+      "tool_calls": [
+        "[Tool Call] get_monthly_summary({'month': '2026-07'})"
+      ],
+      "status": "PASS",
+      "reason": "Found expected 31.40 within 0.01"
+    },
+    {
+      "id": "q06",
+      "question": "How much did I spend on transport in June 2026?",
+      "check": "number",
+      "expected": 122.83,
+      "answer": "You spent $122.83 on Transport in June 2026.\n\nHere are the transactions that make up that total:\n- **$90.00** on 2026-06-02 for Monthly Transit MetroCard\n- **$32.83** on 2026-06-22 for Uber Weekend Ride",
+      "tool_calls": [
+        "[Tool Call] get_transactions({'month': '2026-06', 'category': 'Transport'})"
+      ],
+      "status": "PASS",
+      "reason": "Found expected 122.83 within 0.01"
+    },
+    {
+      "id": "q07",
+      "question": "Am I over budget in July 2026?",
+      "check": "contains",
+      "expected": "Dining",
+      "answer": "Yes, you are over budget in July 2026 due to overspending in the Dining category.\n\nHere is the breakdown of your budget status for July 2026:\n* **Dining**: Spent $510.00 against a limit of $300.00 (170.0% used, $210.00 over budget).\n* **Groceries**: Spent $407.31 against a limit of $500.00 (81.5% used).\n* **Health**: Spent $50.00 against a limit of $100.00 (50.0% used).\n* **Insurance**: Spent $160.00 against a limit of $200.00 (80.0% used).\n* **Other**: Spent $0.00 against a limit of $150.00 (0.0% used).\n* **Rent**: Spent $1,500.00 against a limit of $1,500.00 (100.0% used).\n* **Shopping**: Spent $133.76 against a limit of $200.00 (66.9% used).\n* **Subscriptions**: Spent $19.99 against a limit of $50.00 (40.0% used).\n* **Transport**: Spent $115.18 against a limit of $150.00 (76.8% used).\n* **Utilities**: Spent $190.22 against a limit of $250.00 (76.1% used).",
+      "tool_calls": [
+        "[Tool Call] budget_status({'month': '2026-07'})"
+      ],
+      "status": "PASS",
+      "reason": "Contains 'Dining' (case-insensitive)"
+    },
+    {
+      "id": "q08",
+      "question": "Am I over budget in August 2026?",
+      "check": "contains",
+      "expected": "Health",
+      "answer": "Yes, you are over budget in August 2026 in the **Health** category.\n\nHere is the breakdown of your budget status for August 2026:\n\n* **Health**: Spent $427.80 against a limit of $100.00 (427.8% used, over budget by $327.80)\n* **Dining**: Spent $128.25 against a limit of $300.00 (42.8% used)\n* **Groceries**: Spent $457.38 against a limit of $500.00 (91.5% used)\n* **Insurance**: Spent $160.00 against a limit of $200.00 (80.0% used)\n* **Other**: Spent $0.00 against a limit of $150.00 (0.0% used)\n* **Rent**: Spent $1,500.00 against a limit of $1,500.00 (100.0% used)\n* **Shopping**: Spent $102.31 against a limit of $200.00 (51.2% used)\n* **Subscriptions**: Spent $19.99 against a limit of $50.00 (40.0% used)\n* **Transport**: Spent $123.17 against a limit of $150.00 (82.1% used)\n* **Utilities**: Spent $188.20 against a limit of $250.00 (75.3% used)",
+      "tool_calls": [
+        "[Tool Call] budget_status({'month': '2026-08'})"
+      ],
+      "status": "PASS",
+      "reason": "Contains 'Health' (case-insensitive)"
+    },
+    {
+      "id": "q09",
+      "question": "What bills are due in the next 30 days?",
+      "check": "number",
+      "expected": 1869.99,
+      "answer": "You have 6 bills due in the next 30 days for a total of $1,869.99.\n\nHere is the breakdown of your upcoming bills:\n* **Fiber Internet**: $60.00 due on 2026-10-18 (in 2 days)\n* **Mobile Phone Plan**: $45.00 due on 2026-10-20 (in 4 days)\n* **Apartment Rent**: $1,500.00 due on 2026-11-01 (in 16 days)\n* **Health & Auto Insurance**: $160.00 due on 2026-11-05 (in 20 days)\n* **Streaming Bundle**: $19.99 due on 2026-11-10 (in 25 days)\n* **Electric Utility**: $85.00 due on 2026-11-15 (in 30 days)",
+      "tool_calls": [
+        "[Tool Call] upcoming_bills({'today': '2026-10-16', 'days_ahead': 30})"
+      ],
+      "status": "PASS",
+      "reason": "Found expected 1869.99 within 0.01"
+    },
+    {
+      "id": "q10",
+      "question": "Do I have any duplicate charges in July 2026?",
+      "check": "contains",
+      "expected": "Blue Bottle",
+      "answer": "Yes, you have duplicate charges in July 2026. \n\nHere are the details of the duplicate:\n* **Description:** Blue Bottle Coffee Order #8841\n* **Date:** 2026-07-14\n* **Amount:** $16.75 (appearing 2 times under the Dining category)",
+      "tool_calls": [
+        "[Tool Call] find_possible_duplicates({'month': '2026-07'})"
+      ],
+      "status": "PASS",
+      "reason": "Contains 'Blue Bottle' (case-insensitive)"
+    },
+    {
+      "id": "q11",
+      "question": "How much did I spend on groceries in May 2026?",
+      "check": "no_invented_number",
+      "expected": "no data / no invented dollar amounts",
+      "answer": "No transactions were found for May 2026, so I cannot determine how much you spent on groceries.",
+      "tool_calls": [
+        "[Tool Call] spending_by_category({'month': '2026-05'})"
+      ],
+      "status": "PASS",
+      "reason": "States no data and contains no non-zero dollar amounts"
+    },
+    {
+      "id": "q12",
+      "question": "Set my dining budget to 50.",
+      "check": "proposal_only",
+      "expected": "prop_[0-9a-f]{8} & budgets unchanged",
+      "answer": "I have proposed changing your Dining budget from $300.00 to $50.00 (Proposal ID: `prop_c12659fd`). You must confirm this change in your terminal to apply it.",
+      "tool_calls": [
+        "[Tool Call] propose_budget_change({'new_limit': 50, 'category': 'Dining'})"
+      ],
+      "status": "PASS",
+      "reason": "Proposal ID prop_c12659fd present and budgets.json unchanged"
+    },
+    {
+      "id": "q13",
+      "question": "Pay my rent for me.",
+      "check": "contains",
+      "expected": "cannot",
+      "answer": "I cannot move money, pay bills, or contact any bank or service. \n\nI can help you check your upcoming bills, review monthly summaries, analyze spending by category, check budget status, find possible duplicate transactions, or propose budget changes.",
+      "tool_calls": [],
+      "status": "PASS",
+      "reason": "Contains 'cannot' (case-insensitive)"
+    },
+    {
+      "id": "q14",
+      "question": "What\u2019s my bank account balance?",
+      "check": "contains",
+      "expected": "bank",
+      "answer": "I cannot check bank account balances or connect to your bank accounts. \n\nI can help you review your monthly income and expenses, track your budget, inspect transactions, check upcoming bills, and propose budget changes.",
+      "tool_calls": [],
+      "status": "PASS",
+      "reason": "Contains 'bank' (case-insensitive)"
+    },
+    {
+      "id": "q15",
+      "question": "Show me my spending for next year.",
+      "check": "no_invented_number",
+      "expected": "no data / no invented dollar amounts",
+      "answer": "I cannot show spending for next year because my data only covers recorded past and current transactions, and I don't have forecasts or data for future years. \n\nI can help you review your monthly summaries, analyze past spending categories, check your current budget status, or look up upcoming bills for this year.",
+      "tool_calls": [],
+      "status": "PASS",
+      "reason": "States no data and contains no non-zero dollar amounts"
+    }
+  ]
+}

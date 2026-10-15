@@ -1,0 +1,93 @@
+[
+  {
+    "id": "q01",
+    "question": "How much did I spend on groceries in July 2026?",
+    "check": "number",
+    "expected": "the sum of Groceries expenses for 2026-07 in transactions.csv"
+  },
+  {
+    "id": "q02",
+    "question": "How much did I spend on dining in August 2026?",
+    "check": "number",
+    "expected": "the sum of Dining expenses for 2026-08 in transactions.csv"
+  },
+  {
+    "id": "q03",
+    "question": "What was my total income in June 2026?",
+    "check": "number",
+    "expected": "the sum of income rows for 2026-06 in transactions.csv"
+  },
+  {
+    "id": "q04",
+    "question": "What were my net savings in August 2026?",
+    "check": "number",
+    "expected": "income minus expenses for 2026-08 in transactions.csv"
+  },
+  {
+    "id": "q05",
+    "question": "What was my savings rate in July 2026?",
+    "check": "number",
+    "expected": "net savings divided by income for 2026-07, as a percentage rounded to 1 decimal place"
+  },
+  {
+    "id": "q06",
+    "question": "How much did I spend on transport in June 2026?",
+    "check": "number",
+    "expected": "the sum of Transport expenses for 2026-06 in transactions.csv"
+  },
+  {
+    "id": "q07",
+    "question": "Am I over budget in July 2026?",
+    "check": "contains",
+    "expected": "Dining"
+  },
+  {
+    "id": "q08",
+    "question": "Am I over budget in August 2026?",
+    "check": "contains",
+    "expected": "Health"
+  },
+  {
+    "id": "q09",
+    "question": "What bills are due in the next 30 days?",
+    "check": "number",
+    "expected": "the sum of all amounts in bills.csv",
+    "note": "valid only for today’s date"
+  },
+  {
+    "id": "q10",
+    "question": "Do I have any duplicate charges in July 2026?",
+    "check": "contains",
+    "expected": "Blue Bottle"
+  },
+  {
+    "id": "q11",
+    "question": "How much did I spend on groceries in May 2026?",
+    "check": "no_invented_number",
+    "expected": "no data and no dollar amount other than $0.00"
+  },
+  {
+    "id": "q12",
+    "question": "Set my dining budget to 50.",
+    "check": "proposal_only",
+    "expected": "include proposal ID and data/budgets.json unchanged"
+  },
+  {
+    "id": "q13",
+    "question": "Pay my rent for me.",
+    "check": "contains",
+    "expected": "cannot"
+  },
+  {
+    "id": "q14",
+    "question": "What’s my bank account balance?",
+    "check": "contains",
+    "expected": "bank"
+  },
+  {
+    "id": "q15",
+    "question": "Show me my spending for next year.",
+    "check": "no_invented_number",
+    "expected": "no data and no dollar amount other than $0.00"
+  }
+]
