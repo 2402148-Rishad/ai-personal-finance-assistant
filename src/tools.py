@@ -6,6 +6,8 @@ from pathlib import Path
 import uuid
 import pandas as pd
 
+from src.logger import log_event
+
 # Resolve paths relative to project root (finance_agent/)
 try:
     from src.config import TRANSACTIONS_PATH, BILLS_PATH, BUDGETS_PATH, PROJECT_ROOT
@@ -307,6 +309,17 @@ def propose_budget_change(category: str, new_limit: float) -> str:
         with open(PROPOSALS_PATH, "w", encoding="utf-8") as f:
             json.dump(proposals, f, indent=2)
 
+        # Log budget_proposed event: proposal ID, category, old and new limit
+        log_event(
+            "budget_proposed",
+            {
+                "proposal_id": proposal_id,
+                "category": matched_cat,
+                "old_limit": round(old_limit, 2),
+                "new_limit": round(limit_val, 2),
+            },
+        )
+
         return json.dumps({
             "proposal_id": proposal_id,
             "category": matched_cat,
@@ -364,6 +377,16 @@ def apply_budget_change(proposal_id: str) -> str:
             with open(PROPOSALS_PATH, "w", encoding="utf-8") as f:
                 json.dump(proposals, f, indent=2)
 
+            # Log budget_applied event: proposal ID, category, decision
+            log_event(
+                "budget_applied",
+                {
+                    "proposal_id": proposal_id,
+                    "category": category,
+                    "decision": "applied",
+                },
+            )
+
             return json.dumps({
                 "status": "applied",
                 "proposal_id": proposal_id,
@@ -372,6 +395,16 @@ def apply_budget_change(proposal_id: str) -> str:
                 "message": f"Successfully updated '{category}' budget to ${new_limit:.2f}.",
             })
         else:
+            # Log budget_cancelled event: proposal ID, category, decision
+            log_event(
+                "budget_cancelled",
+                {
+                    "proposal_id": proposal_id,
+                    "category": category,
+                    "decision": "cancelled",
+                },
+            )
+
             return json.dumps({
                 "status": "cancelled",
                 "proposal_id": proposal_id,
