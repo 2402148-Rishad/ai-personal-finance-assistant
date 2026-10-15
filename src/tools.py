@@ -142,10 +142,14 @@ def upcoming_bills(today: str, days_ahead: int = 30) -> str:
                     "days_until_due": offset,
                 })
 
+        total_due = round(sum(b["amount"] for b in upcoming), 2)
+
         return json.dumps({
             "today": today,
             "days_ahead": days_ahead,
+            "bill_count": len(upcoming),
             "count": len(upcoming),
+            "total_due": total_due,
             "upcoming_bills": upcoming,
         })
     except Exception as e:
@@ -294,7 +298,7 @@ GET_TRANSACTIONS_SCHEMA = {
 
 UPCOMING_BILLS_SCHEMA = {
     "name": "upcoming_bills",
-    "description": "Finds recurring bills due within N days from a reference date. Use to check bill schedules and upcoming dues. Arguments: today (YYYY-MM-DD), days_ahead (integer, default 30). Result: JSON list of upcoming bills with due dates and amounts.",
+    "description": "Finds recurring bills due within N days from a reference date. Use to check bill schedules and upcoming dues. Arguments: today (YYYY-MM-DD), days_ahead (integer, default 30). Result: JSON list of upcoming bills with due dates, amounts, bill_count, and total_due. Totals must be quoted directly from total_due.",
     "parameters": {
         "type": "object",
         "properties": {

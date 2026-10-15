@@ -110,6 +110,21 @@ class TestFinancialTools:
         data_invalid = json.loads(raw_invalid)
         assert "error" in data_invalid
 
+    def test_upcoming_bills_total_due(self):
+        """Test upcoming_bills computes bill_count and total_due accurately."""
+        import pandas as pd
+        from src.config import BILLS_PATH
+
+        raw_res = upcoming_bills("2026-10-16", 30)
+        data = json.loads(raw_res)
+        assert "error" not in data
+        assert data["bill_count"] == 6
+        assert data["total_due"] == 1869.99
+
+        bills_df = pd.read_csv(BILLS_PATH)
+        expected_total = round(float(bills_df["amount"].sum()), 2)
+        assert data["total_due"] == expected_total
+
     def test_budget_status(self):
         """Test budget limits, actual spending, percent used, and over-budget flags."""
         raw_res = budget_status("2026-07")
