@@ -1,0 +1,71 @@
+date,month,category,description,type,amount
+2026-06-01,2026-06,Other,Employer Direct Deposit Payroll,income,4500.0
+2026-06-01,2026-06,Rent,Apartment Rent Payment,expense,1500.0
+2026-06-02,2026-06,Transport,Monthly Transit MetroCard,expense,90.0
+2026-06-04,2026-06,Groceries,Grocery run at Trader Joe's,expense,95.88
+2026-06-05,2026-06,Dining,Chipotle Lunch,expense,16.5
+2026-06-05,2026-06,Insurance,Health & Auto Insurance Premium,expense,160.0
+2026-06-08,2026-06,Shopping,Home Goods & Supplies,expense,80.15
+2026-06-09,2026-06,Dining,Corner Bakery & Espresso,expense,9.25
+2026-06-10,2026-06,Subscriptions,Streaming Bundle Subscription,expense,19.99
+2026-06-11,2026-06,Groceries,Grocery run at Whole Foods Market,expense,104.63
+2026-06-12,2026-06,Health,CVS Pharmacy Prescription & Vitamins,expense,32.5
+2026-06-15,2026-06,Utilities,City Power Electric Bill,expense,87.39
+2026-06-15,2026-06,Dining,Pizzeria Trattoria Dinner,expense,52.0
+2026-06-18,2026-06,Utilities,Fiber Internet Monthly Service,expense,60.0
+2026-06-18,2026-06,Groceries,Grocery run at Local Farmers Market,expense,102.81
+2026-06-20,2026-06,Utilities,Mobile Phone Monthly Plan,expense,45.0
+2026-06-20,2026-06,Dining,Thai Basil Bistro,expense,38.5
+2026-06-22,2026-06,Shopping,Home Goods & Supplies,expense,43.91
+2026-06-22,2026-06,Transport,Uber Weekend Ride,expense,32.83
+2026-06-25,2026-06,Groceries,Grocery run at Safeway Supermarket,expense,120.78
+2026-06-27,2026-06,Dining,Taco Taqueria Dinner,expense,41.0
+2026-06-29,2026-06,Dining,Artisan Coffee Roasters,expense,8.75
+2026-07-01,2026-07,Other,Employer Direct Deposit Payroll,income,4500.0
+2026-07-01,2026-07,Rent,Apartment Rent Payment,expense,1500.0
+2026-07-02,2026-07,Transport,Monthly Transit MetroCard,expense,90.0
+2026-07-03,2026-07,Dining,Sushi Omakase Celebration,expense,145.0
+2026-07-04,2026-07,Groceries,Grocery run at Trader Joe's,expense,96.04
+2026-07-05,2026-07,Insurance,Health & Auto Insurance Premium,expense,160.0
+2026-07-07,2026-07,Dining,Blue Bottle Coffee & Pastry,expense,14.5
+2026-07-08,2026-07,Shopping,Home Goods & Supplies,expense,69.24
+2026-07-10,2026-07,Dining,Downtown Rooftop Lounge & Drinks,expense,78.0
+2026-07-10,2026-07,Subscriptions,Streaming Bundle Subscription,expense,19.99
+2026-07-11,2026-07,Groceries,Grocery run at Whole Foods Market,expense,102.65
+2026-07-13,2026-07,Dining,Italian Trattoria Birthday Dinner,expense,112.5
+2026-07-14,2026-07,Dining,Blue Bottle Coffee Order #8841,expense,16.75
+2026-07-14,2026-07,Dining,Blue Bottle Coffee Order #8841,expense,16.75
+2026-07-15,2026-07,Utilities,City Power Electric Bill,expense,85.22
+2026-07-16,2026-07,Health,Dental Clinic Routine Cleaning Copay,expense,50.0
+2026-07-17,2026-07,Dining,Street Food Festival,expense,46.0
+2026-07-18,2026-07,Utilities,Fiber Internet Monthly Service,expense,60.0
+2026-07-18,2026-07,Groceries,Grocery run at Local Farmers Market,expense,112.69
+2026-07-20,2026-07,Utilities,Mobile Phone Monthly Plan,expense,45.0
+2026-07-22,2026-07,Shopping,Home Goods & Supplies,expense,64.52
+2026-07-22,2026-07,Transport,Uber Weekend Ride,expense,25.18
+2026-07-24,2026-07,Dining,Artisan Ramen Bar,expense,34.0
+2026-07-25,2026-07,Groceries,Grocery run at Safeway Supermarket,expense,95.93
+2026-07-28,2026-07,Dining,Bistro French Cafe Lunch,expense,28.5
+2026-07-31,2026-07,Dining,Late Night Taco Stand,expense,18.0
+2026-08-01,2026-08,Other,Employer Direct Deposit Payroll,income,4500.0
+2026-08-01,2026-08,Rent,Apartment Rent Payment,expense,1500.0
+2026-08-02,2026-08,Transport,Monthly Transit MetroCard,expense,90.0
+2026-08-04,2026-08,Groceries,Grocery run at Trader Joe's,expense,115.62
+2026-08-04,2026-08,Dining,Poke Bowl Express,expense,19.5
+2026-08-05,2026-08,Insurance,Health & Auto Insurance Premium,expense,160.0
+2026-08-08,2026-08,Dining,Espresso Bar & Croissant,expense,9.75
+2026-08-08,2026-08,Shopping,Home Goods & Supplies,expense,55.31
+2026-08-10,2026-08,Subscriptions,Streaming Bundle Subscription,expense,19.99
+2026-08-11,2026-08,Groceries,Grocery run at Whole Foods Market,expense,123.33
+2026-08-14,2026-08,Dining,Neighborhood Diner Breakfast,expense,26.5
+2026-08-15,2026-08,Utilities,City Power Electric Bill,expense,83.2
+2026-08-16,2026-08,Health,Urgent Care Clinic Visit & Diagnostics,expense,385.0
+2026-08-17,2026-08,Health,Walgreens Pharmacy Antibiotics & Care,expense,42.8
+2026-08-18,2026-08,Utilities,Fiber Internet Monthly Service,expense,60.0
+2026-08-18,2026-08,Groceries,Grocery run at Local Farmers Market,expense,95.23
+2026-08-20,2026-08,Dining,Indian Curry House Dinner,expense,48.0
+2026-08-20,2026-08,Utilities,Mobile Phone Monthly Plan,expense,45.0
+2026-08-22,2026-08,Shopping,Home Goods & Supplies,expense,47.0
+2026-08-22,2026-08,Transport,Uber Weekend Ride,expense,33.17
+2026-08-25,2026-08,Groceries,Grocery run at Safeway Supermarket,expense,123.2
+2026-08-26,2026-08,Dining,Mediterranean Mezze Bowl,expense,24.5

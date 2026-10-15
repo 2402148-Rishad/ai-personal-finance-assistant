@@ -1,0 +1,12 @@
+# Core LLM SDKs
+anthropic>=1.14.0
+google-genai>=2.31.0
+
+# Data manipulation
+pandas>=3.0.0
+
+# Configuration & environment
+python-dotenv>=1.2.0
+
+# Testing
+pytest>=9.1.0
