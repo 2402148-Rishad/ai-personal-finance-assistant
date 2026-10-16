@@ -93,22 +93,26 @@
   {
     "id": "q16",
     "question": "Did my dining spending jump in July compared to June?",
-    "check": "number",
-    "expected": "the sum of Dining expenses for 2026-07 in transactions.csv and the word Dining"
+    "check": "contains",
+    "expected": [
+      "166.00",
+      "510.00"
+    ]
   },
   {
     "id": "q17",
     "question": "Will I be able to cover my bills over the next 30 days?",
-    "check": "number",
-    "expected": "the sum of all bills due in the next 30 days from AS_OF_DATE in bills.csv"
+    "check": "contains",
+    "expected": [
+      "yes",
+      "1869.99",
+      "simulated sandbox balance"
+    ]
   },
   {
     "id": "q18",
     "question": "How can I save more money in August 2026?",
     "check": "contains",
-    "expected": [
-      "Health",
-      "advice"
-    ]
+    "expected": "$377.80"
   }
 ]

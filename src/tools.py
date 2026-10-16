@@ -464,6 +464,7 @@ def cashflow_projection(days_ahead: int = 30, today: str | None = None) -> str:
             f"Expected recurring monthly income is ${avg_monthly_income:.2f} on day {pay_day} of each month.",
             f"Average daily discretionary spend is ${avg_daily_discretionary_spend:.2f} based on non-bill categories across past transaction months.",
             f"Scheduled bills total ${total_bills:.2f} across {len(scheduled_bills)} bills due in the {days_ahead}-day horizon.",
+            "Daily spending uses all discretionary expenses in the period, including one-off costs such as the August medical charge. This makes the projection more conservative.",
         ]
 
         return json.dumps({
@@ -575,6 +576,7 @@ def savings_recommendations(month: str) -> str:
 
         # 2. Spike check
         spikes_by_cat = {}
+        prev_by_cat = {}
         try:
             year, mo = map(int, month.split("-"))
             prev_month = f"{year - 1:04d}-12" if mo == 1 else f"{year:04d}-{mo - 1:02d}"
@@ -605,9 +607,13 @@ def savings_recommendations(month: str) -> str:
             ob_info = over_budget_cats.get(cat)
             sp_info = spikes_by_cat.get(cat)
 
-            ob_saving = ob_info["over_amount"] if ob_info else 0.0
-            sp_saving = sp_info["increase_amount"] if sp_info else 0.0
-            potential_saving = round(max(ob_saving, sp_saving), 2)
+            spent = float(spent_by_cat.get(cat, 0.0))
+            limit = float(ob_info["limit"]) if ob_info else None
+            prev_spent = float(prev_by_cat.get(cat, 0.0)) if prev_by_cat else 0.0
+
+            saving_to_budget = round(spent - limit, 2) if limit is not None else 0.0
+            saving_to_prior_month = round(spent - prev_spent, 2) if prev_spent > 0 else 0.0
+            potential_saving = round(max(saving_to_budget, saving_to_prior_month), 2)
 
             evidence = {}
             if ob_info:
@@ -619,10 +625,21 @@ def savings_recommendations(month: str) -> str:
                 evidence["current_month_spent"] = sp_info["current_amount"]
                 evidence["spike_increase"] = sp_info["increase_amount"]
                 evidence["spike_percent"] = sp_info["increase_percent"]
+            evidence["saving_to_budget"] = saving_to_budget
+            evidence["saving_to_prior_month"] = saving_to_prior_month
 
-            if ob_info and sp_info:
+            if cat == "Health":
+                item_type = "budget_overrun_and_spike" if (ob_info and sp_info) else ("budget_overrun" if ob_info else "spending_spike")
+                if saving_to_budget > saving_to_prior_month:
+                    action = f"Bring Health within its ${limit:.2f} budget to save ${saving_to_budget:.2f}."
+                else:
+                    action = f"Bring Health back to last month’s ${prev_spent:.2f} to save ${saving_to_prior_month:.2f}."
+            elif ob_info and sp_info:
                 item_type = "budget_overrun_and_spike"
-                action = f"Reduce spending in {cat} back within the ${ob_info['limit']:.2f} budget to save up to ${potential_saving:.2f}."
+                if saving_to_budget > saving_to_prior_month:
+                    action = f"Bring {cat} within its ${limit:.2f} budget to save ${saving_to_budget:.2f}."
+                else:
+                    action = f"Bring {cat} back to last month’s ${prev_spent:.2f} to save ${saving_to_prior_month:.2f}."
             elif ob_info:
                 item_type = "budget_overrun"
                 action = f"Reduce spending in {cat} back within the ${ob_info['limit']:.2f} budget to save ${potential_saving:.2f}."
@@ -633,6 +650,8 @@ def savings_recommendations(month: str) -> str:
             items.append({
                 "type": item_type,
                 "category": cat,
+                "saving_to_budget": saving_to_budget,
+                "saving_to_prior_month": saving_to_prior_month,
                 "evidence": evidence,
                 "suggested_action": action,
                 "potential_monthly_saving": potential_saving,
@@ -862,7 +881,7 @@ DETECT_SPENDING_SPIKES_SCHEMA = {
 
 SAVINGS_RECOMMENDATIONS_SCHEMA = {
     "name": "savings_recommendations",
-    "description": "Generates rule-based financial advice and savings recommendations for a given month by evaluating budget overruns, spending spikes, duplicate charges, and savings rate targets. Use this tool whenever asked for advice, tips, or ways to save money. Arguments: month (string YYYY-MM). Result fields to quote: recommendations (each with type, category, suggested_action, potential_monthly_saving), total_potential_saving, and disclaimer. Quote totals and savings amounts only from the tool's fields; always include the disclaimer stating it is a general suggestion and not professional financial advice.",
+    "description": "Generates rule-based financial advice and savings recommendations for a given month by evaluating budget overruns, spending spikes, duplicate charges, and savings rate targets. Use this tool whenever asked for advice, tips, or ways to save money. Arguments: month (string YYYY-MM). Result fields to quote: recommendations (each with type, category, suggested_action, potential_monthly_saving, saving_to_budget, saving_to_prior_month), total_potential_saving, and disclaimer. Quote totals and savings amounts only from the tool's fields; always include the disclaimer stating it is a general suggestion and not professional financial advice.",
     "parameters": {
         "type": "object",
         "properties": {

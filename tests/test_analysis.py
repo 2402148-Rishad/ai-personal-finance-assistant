@@ -135,6 +135,7 @@ class TestAnalysisTools:
         assert data_1["total_bills"] == expected_bills_1
         assert data_1["simulated_starting_balance"] == 7564.57
         assert data_1["total_bills"] == 1869.99
+        assert "Daily spending uses all discretionary expenses in the period, including one-off costs such as the August medical charge. This makes the projection more conservative." in data_1["assumptions"]
 
         # Scenario 2: today="2026-07-15"
         today_2 = "2026-07-15"
@@ -162,11 +163,90 @@ class TestAnalysisTools:
         recommendations = data["recommendations"]
         health_recs = [r for r in recommendations if r.get("category") == "Health"]
         assert len(health_recs) == 1
-        assert health_recs[0]["potential_monthly_saving"] == 377.80
+        health_item = health_recs[0]
+        assert health_item["saving_to_budget"] == 327.80
+        assert health_item["saving_to_prior_month"] == 377.80
+        assert health_item["potential_monthly_saving"] == 377.80
+        assert health_item["suggested_action"] == "Bring Health back to last month’s $50.00 to save $377.80."
 
         computed_sum = round(sum(r["potential_monthly_saving"] for r in recommendations), 2)
         assert data["total_potential_saving"] == computed_sum
         assert data["disclaimer"] == "General suggestion, not professional financial advice."
+
+    def test_tool_vs_pandas_side_by_side_comparison(self):
+        """5: Compares each tool figure with a pandas figure side by side and prints the table."""
+        # 1. July Dining Spike
+        raw_jul_tool = json.loads(detect_spending_spikes("2026-07"))
+        dining_spike_tool = raw_jul_tool["spikes"][0]
+        tool_jul_spike = f"+${dining_spike_tool['increase_amount']:.2f} (+{dining_spike_tool['increase_percent']}%)"
+
+        df_tx = pd.read_csv(TRANSACTIONS_PATH)
+        df_exp = df_tx[df_tx["type"] == "expense"]
+        june_dining = float(df_exp[(df_exp["month"] == "2026-06") & (df_exp["category"] == "Dining")]["amount"].sum())
+        july_dining = float(df_exp[(df_exp["month"] == "2026-07") & (df_exp["category"] == "Dining")]["amount"].sum())
+        diff_dining = round(july_dining - june_dining, 2)
+        pct_dining = round((diff_dining / june_dining) * 100, 1)
+        pandas_jul_spike = f"+${diff_dining:.2f} (+{pct_dining}%)"
+
+        # 2. August Health Spike
+        raw_aug_tool = json.loads(detect_spending_spikes("2026-08"))
+        health_spike_tool = raw_aug_tool["spikes"][0]
+        tool_aug_spike = f"+${health_spike_tool['increase_amount']:.2f} (+{health_spike_tool['increase_percent']}%)"
+
+        jul_health = float(df_exp[(df_exp["month"] == "2026-07") & (df_exp["category"] == "Health")]["amount"].sum())
+        aug_health = float(df_exp[(df_exp["month"] == "2026-08") & (df_exp["category"] == "Health")]["amount"].sum())
+        diff_health = round(aug_health - jul_health, 2)
+        pct_health = round((diff_health / jul_health) * 100, 1)
+        pandas_aug_spike = f"+${diff_health:.2f} (+{pct_health}%)"
+
+        # 3. Cashflow Figures (Starting balance, bill total, daily discretionary average)
+        raw_cf_tool = json.loads(cashflow_projection(30, "2026-08-31"))
+        tool_start_bal = f"${raw_cf_tool['simulated_starting_balance']:.2f}"
+        tool_bills_total = f"${raw_cf_tool['total_bills']:.2f}"
+        tool_daily_disc = f"${raw_cf_tool['avg_daily_discretionary_spend']:.2f}"
+
+        # Pandas Ground Truths
+        acc = json.loads(ACCOUNT_PATH.read_text(encoding="utf-8"))
+        open_bal = float(acc["opening_balance"])
+        inc_to_date = float(df_tx[df_tx["type"] == "income"]["amount"].sum())
+        exp_to_date = float(df_tx[df_tx["type"] == "expense"]["amount"].sum())
+        pandas_start_bal = f"${open_bal + inc_to_date - exp_to_date:.2f}"
+
+        df_bills = pd.read_csv(BILLS_PATH)
+        as_of = datetime.strptime("2026-08-31", "%Y-%m-%d")
+        total_bills_30d = 0.0
+        for offset in range(30 + 1):
+            cur = as_of + timedelta(days=offset)
+            matching = df_bills[df_bills["due_day"] == cur.day]
+            for _, r in matching.iterrows():
+                total_bills_30d += float(r["amount"])
+        pandas_bills_total = f"${total_bills_30d:.2f}"
+
+        bill_categories = set(df_bills["category"].dropna().unique())
+        disc_expenses = df_exp[~df_exp["category"].isin(bill_categories)]["amount"].sum()
+        total_days = (datetime(2026, 8, 31) - datetime(2026, 6, 1)).days + 1
+        pandas_daily_disc = f"${disc_expenses / total_days:.2f}"
+
+        # Build comparison table
+        rows = [
+            ("July Dining Spike (Increase)", tool_jul_spike, pandas_jul_spike, tool_jul_spike == pandas_jul_spike),
+            ("August Health Spike (Increase)", tool_aug_spike, pandas_aug_spike, tool_aug_spike == pandas_aug_spike),
+            ("Starting Balance (as of 08-31)", tool_start_bal, pandas_start_bal, tool_start_bal == pandas_start_bal),
+            ("Total Bills (30-day window)", tool_bills_total, pandas_bills_total, tool_bills_total == pandas_bills_total),
+            ("Daily Discretionary Average", tool_daily_disc, pandas_daily_disc, tool_daily_disc == pandas_daily_disc),
+        ]
+
+        print("\n" + "=" * 90)
+        print(f"{'Metric':<35} | {'Tool Value':<20} | {'Pandas Value':<20} | {'Match'}")
+        print("-" * 90)
+        for metric, t_val, p_val, matched in rows:
+            print(f"{metric:<35} | {t_val:<20} | {p_val:<20} | {matched}")
+            assert matched is True
+        print("=" * 90 + "\n")
+
+        assert raw_cf_tool["simulated_starting_balance"] == 7564.57
+        assert raw_cf_tool["total_bills"] == 1869.99
+        assert raw_cf_tool["avg_daily_discretionary_spend"] == 36.14
 
     def test_cashflow_negative_balance_covers_all_bills_false(self, tmp_path, monkeypatch):
         """6.5: Temporary data folder that makes balance negative and checks covers_all_bills is false."""

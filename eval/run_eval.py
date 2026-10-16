@@ -160,16 +160,47 @@ def evaluate_question(
     q_id = entry["id"]
 
     if q_id == "q16":
-        expected_num = compute_expected_number(q_id, df, bills_df)
-        nums = extract_numbers(answer)
-        matched_num = any(abs(n - expected_num) <= 0.01 for n in nums)
-        has_dining = "dining" in answer.lower()
-        if matched_num and has_dining:
-            return "PASS", f"Found expected {expected_num:.2f} within 0.01 and contains 'Dining'", expected_num
-        elif not matched_num:
-            return "FAIL", f"Expected {expected_num:.2f}, got numbers: {nums}", expected_num
+        # 4.1: q16: answer must contain "166.00" and "510.00" (computed by pandas)
+        mask_jun = (df["month"] == "2026-06") & (df["category"] == "Dining") & (df["type"] == "expense")
+        mask_jul = (df["month"] == "2026-07") & (df["category"] == "Dining") & (df["type"] == "expense")
+        june_amt = f"{df[mask_jun]['amount'].sum():.2f}"
+        july_amt = f"{df[mask_jul]['amount'].sum():.2f}"
+        required = [june_amt, july_amt]
+        missing = [item for item in required if item not in answer]
+        if not missing:
+            return "PASS", f"Contains '{june_amt}' and '{july_amt}'", required
         else:
-            return "FAIL", "Missing required word 'Dining'", expected_num
+            return "FAIL", f"Missing required figures: {missing}", required
+
+    elif q_id == "q17":
+        # 4.2: q17: answer must contain "yes", the bill total (1869.99), and "simulated sandbox balance"
+        expected_bills = compute_expected_number("q17", df, bills_df)
+        bills_str = f"{expected_bills:.2f}"
+        has_yes = "yes" in answer.lower()
+        has_bills = (bills_str in answer) or (f"{expected_bills:,.2f}" in answer) or any(abs(n - expected_bills) <= 0.01 for n in extract_numbers(answer))
+        has_balance_label = "simulated sandbox balance" in answer.lower()
+        missing = []
+        if not has_yes:
+            missing.append("'yes'")
+        if not has_bills:
+            missing.append(f"bill total ({bills_str})")
+        if not has_balance_label:
+            missing.append("'simulated sandbox balance'")
+        if not missing:
+            return "PASS", f"Contains 'yes', bill total ({bills_str}), and 'simulated sandbox balance'", ["yes", bills_str, "simulated sandbox balance"]
+        else:
+            return "FAIL", f"Missing: {', '.join(missing)}", ["yes", bills_str, "simulated sandbox balance"]
+
+    elif q_id == "q18":
+        # 4.3: q18: answer must contain the Health saving from pandas (Aug - Jul = 377.80) with a dollar sign
+        h_aug = float(df[(df["month"] == "2026-08") & (df["category"] == "Health") & (df["type"] == "expense")]["amount"].sum())
+        h_jul = float(df[(df["month"] == "2026-07") & (df["category"] == "Health") & (df["type"] == "expense")]["amount"].sum())
+        health_saving = round(h_aug - h_jul, 2)
+        expected_saving_str = f"${health_saving:.2f}"
+        if expected_saving_str in answer:
+            return "PASS", f"Contains Health saving '{expected_saving_str}' with dollar sign", expected_saving_str
+        else:
+            return "FAIL", f"Missing expected Health saving '{expected_saving_str}'", expected_saving_str
 
     elif check == "number":
         expected_num = compute_expected_number(q_id, df, bills_df)
