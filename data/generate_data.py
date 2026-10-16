@@ -379,11 +379,28 @@ def generate_transactions() -> list[dict]:
     return transactions
 
 
+def generate_account() -> dict:
+    """Generate simulated sandbox account metadata."""
+    return {
+        "opening_balance": 3000.00,
+        "opening_date": "2026-05-31",
+        "currency": "USD",
+        "note": "Simulated sandbox balance, not a real bank account",
+    }
+
+
 def save_and_summarize() -> None:
     """Save all generated datasets and print monthly financial summaries."""
     bills = generate_bills()
     budgets = generate_budgets()
     transactions = generate_transactions()
+    account = generate_account()
+
+    # 0. Save data/account.json
+    account_path = DATA_DIR / "account.json"
+    with open(account_path, "w", encoding="utf-8") as f:
+        json.dump(account, f, indent=2)
+    print(f"[OK] Wrote simulated account data to: {account_path.name}")
 
     # 1. Save data/bills.csv
     bills_path = DATA_DIR / "bills.csv"

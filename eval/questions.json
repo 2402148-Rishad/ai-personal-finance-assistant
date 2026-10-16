@@ -89,5 +89,26 @@
     "question": "Show me my spending for next year.",
     "check": "no_invented_number",
     "expected": "no data and no dollar amount other than $0.00"
+  },
+  {
+    "id": "q16",
+    "question": "Did my dining spending jump in July compared to June?",
+    "check": "number",
+    "expected": "the sum of Dining expenses for 2026-07 in transactions.csv and the word Dining"
+  },
+  {
+    "id": "q17",
+    "question": "Will I be able to cover my bills over the next 30 days?",
+    "check": "number",
+    "expected": "the sum of all bills due in the next 30 days from AS_OF_DATE in bills.csv"
+  },
+  {
+    "id": "q18",
+    "question": "How can I save more money in August 2026?",
+    "check": "contains",
+    "expected": [
+      "Health",
+      "advice"
+    ]
   }
 ]

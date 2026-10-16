@@ -12,6 +12,7 @@ DATA_DIR = PROJECT_ROOT / "data"
 TRANSACTIONS_PATH = DATA_DIR / "transactions.csv"
 BILLS_PATH = DATA_DIR / "bills.csv"
 BUDGETS_PATH = DATA_DIR / "budgets.json"
+ACCOUNT_PATH = DATA_DIR / "account.json"
 
 # Load environment variables only from finance_agent/.env
 DOTENV_PATH = PROJECT_ROOT / ".env"

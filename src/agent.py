@@ -96,7 +96,8 @@ def trim_history(history: list, max_turns: int = 10) -> list:
 def run_agent(question: str, history: list | None = None) -> AgentResult:
     """Execute the agent loop to answer a user question using available tools, permission checks, and logging."""
     # 2.1) question: log the user's question at the start of run_agent
-    log_event("question", {"question": question})
+    history_turns = len(history) if history else 0
+    log_event("question", {"question": question, "history_turns": history_turns})
 
     all_tool_calls = []
     convo_history = list(history) if history else []

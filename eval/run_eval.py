@@ -61,7 +61,7 @@ def compute_expected_number(q_id: str, df: pd.DataFrame, bills_df: pd.DataFrame)
         # Sum of Transport expenses for 2026-06
         mask = (df["month"] == "2026-06") & (df["category"] == "Transport") & (df["type"] == "expense")
         return round(float(df[mask]["amount"].sum()), 2)
-    elif q_id == "q09":
+    elif q_id in ("q09", "q17"):
         # Compute expected bill total using the same 30-day window as upcoming_bills tool,
         # starting from AS_OF_DATE.
         # Include all bills whose due date falls within that window.
@@ -73,6 +73,10 @@ def compute_expected_number(q_id: str, df: pd.DataFrame, bills_df: pd.DataFrame)
             for _, row in matching.iterrows():
                 upcoming.append(float(row["amount"]))
         return round(float(sum(upcoming)), 2)
+    elif q_id == "q16":
+        # Sum of Dining expenses for 2026-07
+        mask = (df["month"] == "2026-07") & (df["category"] == "Dining") & (df["type"] == "expense")
+        return round(float(df[mask]["amount"].sum()), 2)
     else:
         raise ValueError(f"Unknown numeric evaluation id: {q_id}")
 
@@ -155,7 +159,19 @@ def evaluate_question(
     check = entry["check"]
     q_id = entry["id"]
 
-    if check == "number":
+    if q_id == "q16":
+        expected_num = compute_expected_number(q_id, df, bills_df)
+        nums = extract_numbers(answer)
+        matched_num = any(abs(n - expected_num) <= 0.01 for n in nums)
+        has_dining = "dining" in answer.lower()
+        if matched_num and has_dining:
+            return "PASS", f"Found expected {expected_num:.2f} within 0.01 and contains 'Dining'", expected_num
+        elif not matched_num:
+            return "FAIL", f"Expected {expected_num:.2f}, got numbers: {nums}", expected_num
+        else:
+            return "FAIL", "Missing required word 'Dining'", expected_num
+
+    elif check == "number":
         expected_num = compute_expected_number(q_id, df, bills_df)
         nums = extract_numbers(answer)
         # Check if expected number appears within 0.01 tolerance

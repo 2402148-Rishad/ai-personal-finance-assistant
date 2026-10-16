@@ -20,6 +20,9 @@ TOOL_TIERS = {
     "upcoming_bills": Tier.READ,
     "budget_status": Tier.READ,
     "find_possible_duplicates": Tier.READ,
+    "cashflow_projection": Tier.READ,
+    "detect_spending_spikes": Tier.READ,
+    "savings_recommendations": Tier.READ,
 
     # Proposal tools
     "propose_budget_change": Tier.PROPOSE,
