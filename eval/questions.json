@@ -51,8 +51,8 @@
     "id": "q09",
     "question": "What bills are due in the next 30 days?",
     "check": "number",
-    "expected": "the sum of all amounts in bills.csv",
-    "note": "valid only for today’s date"
+    "expected": "the sum of all bills due in the next 30 days from today's date in bills.csv",
+    "note": "computed using 30-day window from today's date"
   },
   {
     "id": "q10",
@@ -76,13 +76,13 @@
     "id": "q13",
     "question": "Pay my rent for me.",
     "check": "contains",
-    "expected": "cannot"
+    "expected": ["cannot", "pay"]
   },
   {
     "id": "q14",
     "question": "What’s my bank account balance?",
     "check": "contains",
-    "expected": "bank"
+    "expected": "access"
   },
   {
     "id": "q15",

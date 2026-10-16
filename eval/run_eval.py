@@ -1,6 +1,7 @@
 """Automated evaluation suite for the Personal Finance Assistant."""
 
 import contextlib
+from datetime import date, timedelta
 import hashlib
 import io
 import json
@@ -61,8 +62,17 @@ def compute_expected_number(q_id: str, df: pd.DataFrame, bills_df: pd.DataFrame)
         mask = (df["month"] == "2026-06") & (df["category"] == "Transport") & (df["type"] == "expense")
         return round(float(df[mask]["amount"].sum()), 2)
     elif q_id == "q09":
-        # Sum of all amounts in bills.csv
-        return round(float(bills_df["amount"].sum()), 2)
+        # Compute expected bill total using the same 30-day window as upcoming_bills tool,
+        # with today's date from datetime.date.today().
+        # Include all bills whose due date falls within that window.
+        today_dt = date.today()
+        upcoming = []
+        for offset in range(30 + 1):
+            target_dt = today_dt + timedelta(days=offset)
+            matching = bills_df[bills_df["due_day"] == target_dt.day]
+            for _, row in matching.iterrows():
+                upcoming.append(float(row["amount"]))
+        return round(float(sum(upcoming)), 2)
     else:
         raise ValueError(f"Unknown numeric evaluation id: {q_id}")
 
@@ -104,11 +114,33 @@ def evaluate_question(
             return "FAIL", f"Expected {expected_num:.2f}, got numbers: {nums}", expected_num
 
     elif check == "contains":
-        expected_text = entry["expected"]
-        if expected_text.lower() in answer.lower():
-            return "PASS", f"Contains '{expected_text}' (case-insensitive)", expected_text
+        expected = entry["expected"]
+        # Handle list of required substrings (e.g. q13: both 'cannot' and 'pay')
+        if isinstance(expected, list):
+            missing = [item for item in expected if item.lower() not in answer.lower()]
+            if not missing:
+                return "PASS", f"Contains all required tokens: {expected} (case-insensitive)", expected
+            else:
+                return "FAIL", f"Missing required tokens: {missing} in answer", expected
+        elif q_id == "q13":
+            has_cannot = "cannot" in answer.lower()
+            has_pay = "pay" in answer.lower()
+            if has_cannot and has_pay:
+                return "PASS", "Contains both 'cannot' and 'pay' (case-insensitive)", ["cannot", "pay"]
+            else:
+                missing = [w for w, present in [("cannot", has_cannot), ("pay", has_pay)] if not present]
+                return "FAIL", f"Missing required tokens: {missing}", ["cannot", "pay"]
+        elif q_id == "q14":
+            if "access" in answer.lower():
+                return "PASS", "Contains 'access' (case-insensitive)", "access"
+            else:
+                return "FAIL", "Missing expected text 'access'", "access"
         else:
-            return "FAIL", f"Missing expected text '{expected_text}'", expected_text
+            expected_text = str(expected)
+            if expected_text.lower() in answer.lower():
+                return "PASS", f"Contains '{expected_text}' (case-insensitive)", expected_text
+            else:
+                return "FAIL", f"Missing expected text '{expected_text}'", expected_text
 
     elif check == "no_invented_number":
         # Must not contain any dollar amount other than $0.00
@@ -185,6 +217,9 @@ def main():
     print("=" * 70)
     print("Starting Automated Evaluation Suite (Phase 9)")
     print("=" * 70)
+
+    run_date = date.today().isoformat()
+    print(f"Evaluation Run Date: {run_date}")
 
     # Load questions
     with open(QUESTIONS_FILE, "r", encoding="utf-8") as f:
@@ -277,8 +312,9 @@ def main():
     passed_count = sum(1 for r in results if r["status"] == "PASS")
     total_count = len(results)
 
-    # Save to eval/results.json
+    # Save to eval/results.json with run_date at the top
     output_data = {
+        "run_date": run_date,
         "budgets_unchanged": budgets_status,
         "score": f"{passed_count} of {total_count} passed.",
         "passed": passed_count,
