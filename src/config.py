@@ -32,3 +32,6 @@ if not GEMINI_API_KEY or not GEMINI_API_KEY.strip():
 MODEL = "gemini-3.5-flash-lite"
 MAX_AGENT_STEPS = 5
 CURRENCY = "USD"
+
+# Simulated sandbox date, because the demo data ends in August 2026
+AS_OF_DATE = os.getenv("FINANCE_AS_OF_DATE", "2026-08-31")

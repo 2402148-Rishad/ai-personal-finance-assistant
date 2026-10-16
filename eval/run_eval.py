@@ -17,7 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.agent import run_agent
-from src.config import PROJECT_ROOT, TRANSACTIONS_PATH, BILLS_PATH, BUDGETS_PATH
+from src.config import PROJECT_ROOT, TRANSACTIONS_PATH, BILLS_PATH, BUDGETS_PATH, AS_OF_DATE
 
 QUESTIONS_FILE = PROJECT_ROOT / "eval" / "questions.json"
 RESULTS_FILE = PROJECT_ROOT / "eval" / "results.json"
@@ -63,18 +63,35 @@ def compute_expected_number(q_id: str, df: pd.DataFrame, bills_df: pd.DataFrame)
         return round(float(df[mask]["amount"].sum()), 2)
     elif q_id == "q09":
         # Compute expected bill total using the same 30-day window as upcoming_bills tool,
-        # with today's date from datetime.date.today().
+        # starting from AS_OF_DATE.
         # Include all bills whose due date falls within that window.
-        today_dt = date.today()
+        as_of_dt = date.fromisoformat(AS_OF_DATE)
         upcoming = []
         for offset in range(30 + 1):
-            target_dt = today_dt + timedelta(days=offset)
+            target_dt = as_of_dt + timedelta(days=offset)
             matching = bills_df[bills_df["due_day"] == target_dt.day]
             for _, row in matching.iterrows():
                 upcoming.append(float(row["amount"]))
         return round(float(sum(upcoming)), 2)
     else:
         raise ValueError(f"Unknown numeric evaluation id: {q_id}")
+
+
+def compute_budget_status_pandas(month: str, df: pd.DataFrame, budgets_path: Path = BUDGETS_PATH) -> tuple[list[str], list[str]]:
+    """Compute exact over-budget and under-budget category lists from budget_status using pandas."""
+    with open(budgets_path, "r", encoding="utf-8") as f:
+        budgets = json.load(f)
+    m_exp = df[(df["month"] == month) & (df["type"] == "expense")]
+    spending = m_exp.groupby("category")["amount"].sum()
+    over_budget = []
+    under_budget = []
+    for cat, limit in budgets.items():
+        spent = float(spending.get(cat, 0.0))
+        if spent > limit:
+            over_budget.append(cat)
+        else:
+            under_budget.append(cat)
+    return over_budget, under_budget
 
 
 def extract_numbers(text: str) -> list[float]:
@@ -112,6 +129,32 @@ def evaluate_question(
             return "PASS", f"Found expected {expected_num:.2f} within 0.01", expected_num
         else:
             return "FAIL", f"Expected {expected_num:.2f}, got numbers: {nums}", expected_num
+
+    elif q_id in ("q07", "q08"):
+        # q07 and q08 must contain the named category and must not contain any other
+        # category that is under budget as an over-budget item.
+        month = "2026-07" if q_id == "q07" else "2026-08"
+        over_budget_cats, under_budget_cats = compute_budget_status_pandas(month, df, BUDGETS_PATH)
+
+        # 1. Must contain all over-budget categories
+        missing_over = [cat for cat in over_budget_cats if cat.lower() not in answer.lower()]
+        if missing_over:
+            return "FAIL", f"Missing required over-budget category: {missing_over}", over_budget_cats
+
+        # 2. Must not contain any other category that is under budget as an over-budget item
+        segments = re.split(r'[.\n;]', answer)
+        for seg in segments:
+            seg_clean = seg.strip()
+            if not seg_clean:
+                continue
+            has_over_budget = bool(re.search(r'\bover[\s-]budget\b|\bexceeded\b|\bover the limit\b|\bover by\b', seg_clean, re.I))
+            is_negated = bool(re.search(r'\bnot over[\s-]budget\b|\bunder[\s-]budget\b|\bunder budget\b|\bwithin budget\b|\bno other\b', seg_clean, re.I))
+            if has_over_budget and not is_negated:
+                for under_cat in under_budget_cats:
+                    if re.search(rf'\b{re.escape(under_cat)}\b', seg_clean, re.I):
+                        return "FAIL", f"Under-budget category '{under_cat}' claimed as over-budget in: '{seg_clean}'", over_budget_cats
+
+        return "PASS", f"Contains over-budget category {over_budget_cats} and no under-budget categories claimed as over-budget", over_budget_cats
 
     elif check == "contains":
         expected = entry["expected"]
@@ -312,9 +355,10 @@ def main():
     passed_count = sum(1 for r in results if r["status"] == "PASS")
     total_count = len(results)
 
-    # Save to eval/results.json with run_date at the top
+    # Save to eval/results.json with run_date and as_of_date at the top
     output_data = {
         "run_date": run_date,
+        "as_of_date": AS_OF_DATE,
         "budgets_unchanged": budgets_status,
         "score": f"{passed_count} of {total_count} passed.",
         "passed": passed_count,

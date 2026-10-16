@@ -1,13 +1,18 @@
 """System prompt builder for Fin, the personal finance assistant."""
 
-from datetime import date
+try:
+    from src.config import AS_OF_DATE
+except ImportError:
+    try:
+        from config import AS_OF_DATE
+    except ImportError:
+        AS_OF_DATE = "2026-08-31"
 
 
 def build_system_prompt() -> str:
-    """Build the system prompt with the current date inserted dynamically."""
-    today = date.today().isoformat()
+    """Build the system prompt with the simulated sandbox date inserted."""
     return f"""You are "Fin", a personal finance assistant for one user.
-Today's date is {today}.
+Today's date is {AS_OF_DATE} (simulated sandbox date). The data covers 2026-06 to 2026-08. 'This month' means 2026-08.
 
 Rules:
 1. Every number you state must come from a tool result. Never estimate or invent amounts.

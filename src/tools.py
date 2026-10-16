@@ -10,16 +10,17 @@ from src.logger import log_event
 
 # Resolve paths relative to project root (finance_agent/)
 try:
-    from src.config import TRANSACTIONS_PATH, BILLS_PATH, BUDGETS_PATH, PROJECT_ROOT
+    from src.config import TRANSACTIONS_PATH, BILLS_PATH, BUDGETS_PATH, PROJECT_ROOT, AS_OF_DATE
 except ImportError:
     try:
-        from config import TRANSACTIONS_PATH, BILLS_PATH, BUDGETS_PATH, PROJECT_ROOT
+        from config import TRANSACTIONS_PATH, BILLS_PATH, BUDGETS_PATH, PROJECT_ROOT, AS_OF_DATE
     except ImportError:
         PROJECT_ROOT = Path(__file__).resolve().parent.parent
         DATA_DIR = PROJECT_ROOT / "data"
         TRANSACTIONS_PATH = DATA_DIR / "transactions.csv"
         BILLS_PATH = DATA_DIR / "bills.csv"
         BUDGETS_PATH = DATA_DIR / "budgets.json"
+        AS_OF_DATE = "2026-08-31"
 
 LOGS_DIR = PROJECT_ROOT / "logs"
 PROPOSALS_PATH = LOGS_DIR / "pending_proposals.json"
@@ -73,15 +74,13 @@ def spending_by_category(month: str) -> str:
 
         grouped = exp_df.groupby("category")["amount"].sum().sort_values(ascending=False)
         spending_dict = {str(cat): round(float(amt), 2) for cat, amt in grouped.items()}
+        total_spent = round(sum(spending_dict.values()), 2)
 
         result = {
             "month": month,
             "spending_by_category": spending_dict,
+            "total_spent": total_spent,
         }
-        # Provide direct category access for convenience
-        for cat, amt in spending_dict.items():
-            if cat not in result:
-                result[cat] = amt
 
         return json.dumps(result)
     except Exception as e:
@@ -117,9 +116,12 @@ def get_transactions(month: str, category: str | None = None) -> str:
         return json.dumps({"error": str(e)})
 
 
-def upcoming_bills(today: str, days_ahead: int = 30) -> str:
+def upcoming_bills(today: str | None = None, days_ahead: int = 30) -> str:
     """Find recurring bills due within N days from a given date."""
     try:
+        if today is None or not str(today).strip():
+            today = AS_OF_DATE
+
         if not BILLS_PATH.exists():
             return json.dumps({"error": f"Bills file not found at {BILLS_PATH}"})
 
@@ -469,20 +471,19 @@ GET_TRANSACTIONS_SCHEMA = {
 
 UPCOMING_BILLS_SCHEMA = {
     "name": "upcoming_bills",
-    "description": "Finds recurring bills due within N days from a reference date. Use to check bill schedules and upcoming dues. Arguments: today (YYYY-MM-DD), days_ahead (integer, default 30). Result: JSON list of upcoming bills with due dates, amounts, bill_count, and total_due. Totals must be quoted directly from total_due.",
+    "description": f"Finds recurring bills due within N days from a reference date. Use to check bill schedules and upcoming dues. Arguments: today (optional YYYY-MM-DD, defaults to simulated date '{AS_OF_DATE}'), days_ahead (integer, default 30). Result: JSON list of upcoming bills with due dates, amounts, bill_count, and total_due. Totals must be quoted directly from total_due.",
     "parameters": {
         "type": "object",
         "properties": {
             "today": {
                 "type": "string",
-                "description": "Reference date in YYYY-MM-DD format, e.g., '2026-07-01'.",
+                "description": f"Optional reference date in YYYY-MM-DD format, e.g., '{AS_OF_DATE}'. Defaults to current simulated sandbox date.",
             },
             "days_ahead": {
                 "type": "integer",
                 "description": "Number of days ahead to search for due bills (default 30).",
             },
         },
-        "required": ["today"],
     },
 }
 

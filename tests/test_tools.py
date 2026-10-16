@@ -38,11 +38,14 @@ class TestFinancialTools:
         assert "2026-05" in err_data["error"]
 
     def test_spending_by_category(self):
-        """Test spending by category, sorting, and specific expected data values."""
+        """Test spending by category, sorting, total_spent, and specific expected data values."""
         # July 2026: Dining spending must be 510.00
         raw_jul = spending_by_category("2026-07")
         data_jul = json.loads(raw_jul)
         assert "error" not in data_jul
+        assert set(data_jul.keys()) == {"month", "spending_by_category", "total_spent"}
+        assert "Dining" not in data_jul
+        assert data_jul["total_spent"] == 3086.46
         spending_jul = data_jul["spending_by_category"]
         assert spending_jul["Dining"] == 510.00
 
@@ -54,6 +57,7 @@ class TestFinancialTools:
         raw_aug = spending_by_category("2026-08")
         data_aug = json.loads(raw_aug)
         assert "error" not in data_aug
+        assert set(data_aug.keys()) == {"month", "spending_by_category", "total_spent"}
         spending_aug = data_aug["spending_by_category"]
         assert spending_aug["Health"] == 427.80
 
@@ -109,6 +113,13 @@ class TestFinancialTools:
         raw_invalid = upcoming_bills("invalid-date")
         data_invalid = json.loads(raw_invalid)
         assert "error" in data_invalid
+
+        # Default to AS_OF_DATE
+        raw_default = upcoming_bills()
+        data_default = json.loads(raw_default)
+        assert "error" not in data_default
+        assert data_default["today"] == "2026-08-31"
+        assert data_default["count"] == 6
 
     def test_upcoming_bills_total_due(self):
         """Test upcoming_bills computes bill_count and total_due accurately."""
