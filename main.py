@@ -51,6 +51,8 @@ def main():
     print("Personal Finance Assistant CLI (type 'exit' to quit)")
     print("-" * 60)
 
+    session_history = []
+
     while True:
         try:
             user_input = input("\nYou: ").strip()
@@ -61,6 +63,11 @@ def main():
                 break
 
             # Human-only commands handled directly before run_agent
+            if user_input == "/reset":
+                session_history = []
+                print("Conversation history cleared.")
+                continue
+
             if user_input == "/pending":
                 handle_pending_command()
                 continue
@@ -83,8 +90,9 @@ def main():
                 print(json.dumps(result))
                 continue
 
-            answer = run_agent(user_input)
-            print(f"\nAssistant: {answer}")
+            agent_result = run_agent(user_input, history=session_history)
+            session_history = agent_result.history
+            print(f"\nAssistant: {agent_result.answer}")
         except (KeyboardInterrupt, EOFError):
             print("\nGoodbye!")
             break

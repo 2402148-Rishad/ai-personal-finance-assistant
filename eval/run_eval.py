@@ -272,9 +272,10 @@ def run_agent_with_retry(question: str) -> tuple[str, list[str], bool]:
         err_msg = ""
         try:
             with contextlib.redirect_stdout(captured_stdout):
-                answer = run_agent(question)
+                result = run_agent(question, history=None)
             out_str = captured_stdout.getvalue()
             tool_calls = [line.strip() for line in out_str.splitlines() if line.startswith("[Tool Call]")]
+            answer = result.answer
 
             if is_provider_error(answer):
                 err_occurred = True

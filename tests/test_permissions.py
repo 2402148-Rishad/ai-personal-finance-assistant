@@ -225,7 +225,8 @@ def test_model_cannot_trigger_apply_budget_change(temp_budget_env, monkeypatch):
     mock_client.models.generate_content.side_effect = mock_generate_content
     monkeypatch.setattr("src.agent.genai.Client", lambda api_key=None: mock_client)
 
-    run_agent("Apply the budget change proposal")
+    res = run_agent("Apply the budget change proposal")
+    assert res.answer is not None
 
     # 3.1) Assert the result is {"error": "This action is not permitted."}
     assert len(captured_tool_results) == 1

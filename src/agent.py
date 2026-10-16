@@ -1,5 +1,6 @@
 """Autonomous agent loop using the Google GenAI SDK with manual tool calling, permissions, and logging."""
 
+from dataclasses import dataclass, field
 import json
 from google import genai
 from google.genai import types
@@ -27,10 +28,78 @@ for schema in TOOL_SCHEMAS:
 agent_tool = types.Tool(function_declarations=function_declarations)
 
 
-def run_agent(question: str) -> str:
+@dataclass
+class AgentResult:
+    """Structured result returned by run_agent."""
+    answer: str
+    tool_calls: list = field(default_factory=list)
+    history: list = field(default_factory=list)
+    status: str = "ok"  # "ok", "step_limit", "error"
+
+
+def _has_function_call(msg) -> bool:
+    """Check if a message content object contains a function call."""
+    if isinstance(msg, dict):
+        if "function_call" in msg:
+            return True
+        parts = msg.get("parts", [])
+    else:
+        parts = getattr(msg, "parts", None) or []
+        if getattr(msg, "function_call", None) is not None:
+            return True
+
+    for p in parts:
+        if isinstance(p, dict):
+            if "function_call" in p and p["function_call"] is not None:
+                return True
+        elif getattr(p, "function_call", None) is not None:
+            return True
+    return False
+
+
+def _has_function_response(msg) -> bool:
+    """Check if a message content object contains a function response."""
+    if isinstance(msg, dict):
+        if "function_response" in msg:
+            return True
+        parts = msg.get("parts", [])
+    else:
+        parts = getattr(msg, "parts", None) or []
+        if getattr(msg, "function_response", None) is not None:
+            return True
+
+    for p in parts:
+        if isinstance(p, dict):
+            if "function_response" in p and p["function_response"] is not None:
+                return True
+        elif getattr(p, "function_response", None) is not None:
+            return True
+    return False
+
+
+def trim_history(history: list, max_turns: int = 10) -> list:
+    """Limit memory to the last max_turns, never separating a function call from its function response."""
+    if not history or len(history) <= max_turns:
+        return list(history) if history else []
+
+    candidate = list(history[-max_turns:])
+
+    # Never leave a function response without its function call:
+    # If the first message in candidate contains a function response, its function call was trimmed off.
+    # Also ensure history does not start with an orphaned function call.
+    while candidate and (_has_function_response(candidate[0]) or _has_function_call(candidate[0])):
+        candidate = candidate[1:]
+
+    return candidate
+
+
+def run_agent(question: str, history: list | None = None) -> AgentResult:
     """Execute the agent loop to answer a user question using available tools, permission checks, and logging."""
     # 2.1) question: log the user's question at the start of run_agent
     log_event("question", {"question": question})
+
+    all_tool_calls = []
+    convo_history = list(history) if history else []
 
     try:
         # Initialize authenticated Gemini client
@@ -45,45 +114,57 @@ def run_agent(question: str) -> str:
             tools=[agent_tool],
         )
 
-        # Initialize message history with the user's initial question
-        history = [
+        # Append user's question to conversation history
+        convo_history.append(
             types.Content(
                 role="user",
                 parts=[types.Part.from_text(text=question)],
             )
-        ]
+        )
+
+        # Trim history to at most 10 turns
+        convo_history = trim_history(convo_history, max_turns=10)
 
         # Run the loop up to MAX_AGENT_STEPS turns
         for step in range(MAX_AGENT_STEPS):
             # Call the Gemini model with conversation history and tool configuration
             response = client.models.generate_content(
                 model=MODEL,
-                contents=history,
+                contents=convo_history,
                 config=tool_config,
             )
 
             # Append model response to conversation history as-is
             if response.candidates and response.candidates[0].content:
-                history.append(response.candidates[0].content)
+                convo_history.append(response.candidates[0].content)
 
             # If model did not request any function calls, return final text
             if not response.function_calls:
                 answer = response.text or ""
                 # 2.5) final_answer: log the answer text
                 log_event("final_answer", {"answer": answer})
-                return answer
+                convo_history = trim_history(convo_history, max_turns=10)
+                return AgentResult(
+                    answer=answer,
+                    tool_calls=all_tool_calls,
+                    history=convo_history,
+                    status="ok",
+                )
 
             # Collect function response parts to return in a single user message
             response_parts = []
             for call in response.function_calls:
                 tool_name = call.name
                 tool_args = call.args or {}
+                if not isinstance(tool_args, dict):
+                    tool_args = dict(tool_args)
 
                 # Print tool invocation details to the terminal (never print API keys)
                 print(f"[Tool Call] {tool_name}({tool_args})")
 
                 # 2.2) tool_call: log tool name and arguments before execution
                 log_event("tool_call", {"tool_name": tool_name, "arguments": tool_args})
+                all_tool_calls.append({"name": tool_name, "arguments": tool_args})
 
                 # Check permissions before running any tool
                 if not check_permission(tool_name):
@@ -130,7 +211,7 @@ def run_agent(question: str) -> str:
                 )
 
             # Send all tool results back to the model as a single user message
-            history.append(
+            convo_history.append(
                 types.Content(
                     role="user",
                     parts=response_parts,
@@ -141,10 +222,24 @@ def run_agent(question: str) -> str:
         log_event("step_limit_reached", {"max_steps": MAX_AGENT_STEPS})
         fallback = "Sorry, that request needed too many steps. Please ask a simpler question."
         log_event("final_answer", {"answer": fallback})
-        return fallback
+        convo_history = trim_history(convo_history, max_turns=10)
+        return AgentResult(
+            answer=fallback,
+            tool_calls=all_tool_calls,
+            history=convo_history,
+            status="step_limit",
+        )
 
     except Exception as e:
         err_msg = str(e)
         # 2.6) error: log any exception with a short message
         log_event("error", {"error": err_msg})
-        return f"An error occurred: {err_msg}"
+        answer = f"An error occurred: {err_msg}"
+        convo_history = trim_history(convo_history, max_turns=10)
+        return AgentResult(
+            answer=answer,
+            tool_calls=all_tool_calls,
+            history=convo_history,
+            status="error",
+        )
+
