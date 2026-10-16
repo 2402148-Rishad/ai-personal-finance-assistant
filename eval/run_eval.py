@@ -94,8 +94,40 @@ def compute_budget_status_pandas(month: str, df: pd.DataFrame, budgets_path: Pat
     return over_budget, under_budget
 
 
+PROVIDER_ERROR_KEYWORDS = ["503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "500", "INTERNAL"]
+
+
+def is_provider_error(text_or_exc: str | Exception) -> bool:
+    """Detect provider errors: any exception from Gemini client, or answer containing provider error keywords."""
+    if isinstance(text_or_exc, Exception):
+        return True
+    if not isinstance(text_or_exc, str):
+        return False
+
+    text = text_or_exc
+    # If run_agent caught an exception and returned 'An error occurred: ...' or 'Error: ...'
+    if text.startswith("An error occurred:") or text.startswith("Error:"):
+        return True
+
+    # Check for direct presence of provider error keywords
+    for kw in ["503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "INTERNAL"]:
+        if kw in text:
+            return True
+
+    # For '500', ensure it's not a dollar amount (e.g. $500 or 4,500)
+    if "500" in text and ("error" in text.lower() or "server" in text.lower() or "internal" in text.lower()):
+        return True
+
+    return False
+
+
 def extract_numbers(text: str) -> list[float]:
-    """Extract all numbers from text (handling commas, decimals, negative signs)."""
+    """Extract all numbers from text (handling commas, decimals, negative signs).
+    
+    Never extracts numbers from error text.
+    """
+    if is_provider_error(text):
+        return []
     matches = re.findall(r"-?\d+(?:,\d{3})*(?:\.\d+)?", text)
     nums = []
     for m in matches:
@@ -115,8 +147,11 @@ def evaluate_question(
 ) -> tuple[str, str, any]:
     """Evaluate agent answer against expected check criteria.
 
-    Returns: (status: PASS/FAIL, reason: str, expected_val: any)
+    Returns: (status: PASS/FAIL/ERROR, reason: str, expected_val: any)
     """
+    if is_provider_error(answer):
+        return "ERROR", "provider unavailable after 3 retries", None
+
     check = entry["check"]
     q_id = entry["id"]
 
@@ -224,35 +259,45 @@ def evaluate_question(
         return "FAIL", f"Unknown check type: {check}", "valid check"
 
 
-def run_agent_with_retry(question: str, max_retries: int = 3) -> tuple[str, list[str]]:
-    """Run agent with retry on 429 rate limit errors, capturing tool calls."""
-    for attempt in range(max_retries + 1):
+def run_agent_with_retry(question: str) -> tuple[str, list[str], bool]:
+    """Run agent with retry up to 3 times on provider errors with exponential backoff (15s, 30s, 60s).
+
+    Returns: (answer, tool_calls, is_provider_error)
+    """
+    backoff_delays = [15, 30, 60]
+
+    for attempt in range(len(backoff_delays) + 1):
         captured_stdout = io.StringIO()
+        err_occurred = False
+        err_msg = ""
         try:
             with contextlib.redirect_stdout(captured_stdout):
                 answer = run_agent(question)
             out_str = captured_stdout.getvalue()
             tool_calls = [line.strip() for line in out_str.splitlines() if line.startswith("[Tool Call]")]
 
-            # Check if answer returned a rate-limit 429 message
-            if ("429" in answer or "RESOURCE_EXHAUSTED" in answer) and attempt < max_retries:
-                print(f"   [Rate limit 429 detected] Waiting 30s before retry {attempt + 1}/{max_retries}...")
-                time.sleep(30)
-                continue
+            if is_provider_error(answer):
+                err_occurred = True
+                err_msg = answer
+            else:
+                return answer, tool_calls, False
 
-            return answer, tool_calls
         except Exception as e:
-            err_msg = str(e)
             out_str = captured_stdout.getvalue()
             tool_calls = [line.strip() for line in out_str.splitlines() if line.startswith("[Tool Call]")]
-            if ("429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg) and attempt < max_retries:
-                print(f"   [Rate limit 429 exception] Waiting 30s before retry {attempt + 1}/{max_retries}...")
-                time.sleep(30)
+            err_occurred = True
+            err_msg = str(e)
+
+        if err_occurred:
+            if attempt < len(backoff_delays):
+                delay = backoff_delays[attempt]
+                print(f"   [Provider error detected: {err_msg[:60]}...] Waiting {delay}s before retry {attempt + 1}/3...")
+                time.sleep(delay)
             else:
-                if attempt == max_retries:
-                    return f"Error: {err_msg}", tool_calls
-                time.sleep(2)
-    return "", []
+                # All 3 retries failed. Do not treat error text as answer.
+                return "", tool_calls, True
+
+    return "", [], True
 
 
 def main():
@@ -296,18 +341,26 @@ def main():
         q_text = entry["question"]
         print(f"\n[{i}/{len(questions)}] Running {q_id}: \"{q_text}\"")
 
-        answer, tool_calls = run_agent_with_retry(q_text)
-
-        status, reason, expected_val = evaluate_question(
-            entry=entry,
-            answer=answer,
-            df=df,
-            bills_df=bills_df,
-            initial_budget_hash=initial_budget_hash,
-        )
+        answer, tool_calls, is_error = run_agent_with_retry(q_text)
 
         for tc in tool_calls:
             print(f"   {tc}")
+
+        if is_error:
+            status = "ERROR"
+            reason = "provider unavailable after 3 retries"
+            expected_val = entry.get("expected")
+            eval_answer = ""
+        else:
+            status, reason, expected_val = evaluate_question(
+                entry=entry,
+                answer=answer,
+                df=df,
+                bills_df=bills_df,
+                initial_budget_hash=initial_budget_hash,
+            )
+            eval_answer = answer
+
         print(f"   Result: {status} ({reason})")
 
         results.append({
@@ -315,7 +368,7 @@ def main():
             "question": q_text,
             "check": entry["check"],
             "expected": expected_val,
-            "answer": answer,
+            "answer": eval_answer,
             "tool_calls": tool_calls,
             "status": status,
             "reason": reason,
@@ -351,17 +404,23 @@ def main():
 
     print(f"\nCleaned up {removed_count} proposals created during evaluation.")
 
-    # Calculate score
+    # Calculate scores
+    error_count = sum(1 for r in results if r["status"] == "ERROR")
     passed_count = sum(1 for r in results if r["status"] == "PASS")
+    evaluated_count = len(results) - error_count
     total_count = len(results)
+
+    summary_score = f"{passed_count} of {evaluated_count} passed, {error_count} errors"
 
     # Save to eval/results.json with run_date and as_of_date at the top
     output_data = {
         "run_date": run_date,
         "as_of_date": AS_OF_DATE,
         "budgets_unchanged": budgets_status,
-        "score": f"{passed_count} of {total_count} passed.",
+        "score": summary_score,
         "passed": passed_count,
+        "evaluated": evaluated_count,
+        "errors": error_count,
         "total": total_count,
         "results": results,
     }
@@ -377,7 +436,7 @@ def main():
         print(f"{r['id']:<6} | {r['status']:<6} | {q_short:<45} | {r['reason']}")
     print("-" * 90)
     print(f"budgets unchanged: {budgets_status}")
-    print(f"{passed_count} of {total_count} passed.")
+    print(summary_score)
     print("=" * 90)
 
 
