@@ -8,7 +8,7 @@ import src.logger as logger_module
 import src.config as config_module
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def temp_logs_dir(tmp_path, monkeypatch):
     """Isolate logs folder for testing to prevent modifying production logs."""
     monkeypatch.setattr(logger_module, "LOGS_DIR", tmp_path)
@@ -97,3 +97,24 @@ def test_result_longer_than_1000_chars_is_truncated(temp_logs_dir):
     logged_res = entry["data"]["result"]
     assert len(logged_res) <= 1000
     assert len(logged_res) == 1000
+
+
+def test_evidence_run_file_name_and_call_time_logs_dir(tmp_path, monkeypatch):
+    """Verify logger writes to evidence_<date>.jsonl when FINANCE_EVIDENCE_RUN=1
+
+    and evaluates LOGS_DIR at call time so monkeypatching works.
+    """
+    monkeypatch.setenv("FINANCE_EVIDENCE_RUN", "1")
+    call_time_dir = tmp_path / "call_time_logs_dir"
+    monkeypatch.setattr(logger_module, "LOGS_DIR", call_time_dir)
+
+    logger_module.log_event("evidence_check_event", {"status": "verified_call_time"})
+
+    today_str = datetime.now().strftime("%Y%m%d")
+    expected_evidence_file = call_time_dir / f"evidence_{today_str}.jsonl"
+
+    assert expected_evidence_file.exists()
+    content = expected_evidence_file.read_text(encoding="utf-8")
+    assert "evidence_check_event" in content
+    assert "verified_call_time" in content
+

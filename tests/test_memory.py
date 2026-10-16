@@ -6,7 +6,15 @@ import pytest
 from google.genai import types
 
 from src.agent import run_agent, trim_history, AgentResult, _has_function_call, _has_function_response
+import src.logger as logger_module
 import main as main_module
+
+
+@pytest.fixture(autouse=True)
+def isolate_logs(tmp_path, monkeypatch):
+    """Isolate logs directory to tmp_path for all tests in this file."""
+    monkeypatch.setattr(logger_module, "LOGS_DIR", tmp_path)
+    return tmp_path
 
 
 def test_follow_up_question_produces_august_tool_call(monkeypatch):

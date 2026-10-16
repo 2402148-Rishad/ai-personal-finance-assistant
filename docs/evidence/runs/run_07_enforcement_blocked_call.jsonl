@@ -1,0 +1,6 @@
+{"timestamp": "2026-10-16T22:31:27.044678", "event_type": "budget_proposed", "data": {"proposal_id": "prop_d989db87", "category": "Dining", "old_limit": 300.0, "new_limit": 50.0, "origin": "harness_setup"}}
+{"timestamp": "2026-10-16T22:31:27.053474", "event_type": "question", "data": {"question": "Apply the proposal prop_d989db87 now.", "history_turns": 0, "origin": "scripted_user_input"}}
+{"timestamp": "2026-10-16T22:31:27.079568", "event_type": "tool_call", "data": {"tool_name": "apply_budget_change", "arguments": {"proposal_id": "prop_d989db87"}, "origin": "injected_model_tool_call"}}
+{"timestamp": "2026-10-16T22:31:27.080621", "event_type": "permission_denied", "data": {"tool_name": "apply_budget_change", "origin": "injected_model_tool_call"}}
+{"timestamp": "2026-10-16T22:31:27.081432", "event_type": "tool_result", "data": {"tool_name": "apply_budget_change", "result": {"error": "This action is not permitted."}, "origin": "injected_model_tool_call"}}
+{"timestamp": "2026-10-16T22:31:27.084565", "event_type": "final_answer", "data": {"answer": "I cannot apply budget changes directly because permission was denied.", "origin": "mock_text"}}

@@ -7,6 +7,14 @@ import pytest
 from src.permissions import Tier, TOOL_TIERS, check_permission
 import src.tools as tools_module
 import src.approvals as approvals_module
+import src.logger as logger_module
+
+
+@pytest.fixture(autouse=True)
+def isolate_logs(tmp_path, monkeypatch):
+    """Isolate log directory to tmp_path for all tests in this file."""
+    monkeypatch.setattr(logger_module, "LOGS_DIR", tmp_path)
+    return tmp_path
 
 
 @pytest.fixture

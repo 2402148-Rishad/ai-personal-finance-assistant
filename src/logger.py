@@ -11,15 +11,21 @@ LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
 
 
 def log_event(event_type: str, data: dict) -> None:
-    """Append a structured JSON record to logs/run_YYYYMMDD.jsonl.
+    """Append a structured JSON record to logs/run_YYYYMMDD.jsonl or evidence_YYYYMMDD.jsonl.
 
     Includes ISO 8601 timestamp, event_type, and data.
     Automatically prevents leaking the GEMINI_API_KEY or .env contents.
     Truncates tool_result if longer than 1000 characters.
     """
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    # Resolve LOGS_DIR dynamically at call time to support runtime monkeypatching
+    logs_dir = Path(globals().get("LOGS_DIR") or (Path(__file__).resolve().parent.parent / "logs"))
+    logs_dir.mkdir(parents=True, exist_ok=True)
     today_str = datetime.now().strftime("%Y%m%d")
-    log_file = LOGS_DIR / f"run_{today_str}.jsonl"
+
+    if os.getenv("FINANCE_EVIDENCE_RUN") == "1":
+        log_file = logs_dir / f"evidence_{today_str}.jsonl"
+    else:
+        log_file = logs_dir / f"run_{today_str}.jsonl"
 
     # Make a copy of data to avoid mutating caller's dictionary
     sanitized_data = dict(data) if isinstance(data, dict) else {"value": data}
