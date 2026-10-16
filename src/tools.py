@@ -334,87 +334,6 @@ def propose_budget_change(category: str, new_limit: float) -> str:
         return json.dumps({"error": str(e)})
 
 
-def apply_budget_change(proposal_id: str) -> str:
-    """Apply a pending budget proposal after user confirmation via terminal input. NEVER called by the model."""
-    try:
-        if not PROPOSALS_PATH.exists():
-            return json.dumps({"error": f"No pending proposals file found at {PROPOSALS_PATH}."})
-
-        with open(PROPOSALS_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            if isinstance(data, dict):
-                proposals = data
-            elif isinstance(data, list):
-                proposals = {p["id"]: p for p in data if isinstance(p, dict) and "id" in p}
-            else:
-                proposals = {}
-
-        if proposal_id not in proposals:
-            return json.dumps({"error": f"Proposal '{proposal_id}' not found."})
-
-        proposal = proposals[proposal_id]
-        category = proposal["category"]
-        old_limit = proposal["old_limit"]
-        new_limit = proposal["new_limit"]
-
-        print(f"\nProposal {proposal_id}:")
-        print(f"  Category:  {category}")
-        print(f"  Old Limit: ${old_limit:.2f}")
-        print(f"  New Limit: ${new_limit:.2f}")
-
-        user_choice = input("Type exactly 'yes' to confirm and apply this change: ").strip()
-
-        if user_choice == "yes":
-            # Load and update budgets.json
-            with open(BUDGETS_PATH, "r", encoding="utf-8") as f:
-                budgets = json.load(f)
-
-            budgets[category] = new_limit
-
-            with open(BUDGETS_PATH, "w", encoding="utf-8") as f:
-                json.dump(budgets, f, indent=2)
-
-            # Remove proposal from pending proposals file
-            del proposals[proposal_id]
-            with open(PROPOSALS_PATH, "w", encoding="utf-8") as f:
-                json.dump(proposals, f, indent=2)
-
-            # Log budget_applied event: proposal ID, category, decision
-            log_event(
-                "budget_applied",
-                {
-                    "proposal_id": proposal_id,
-                    "category": category,
-                    "decision": "applied",
-                },
-            )
-
-            return json.dumps({
-                "status": "applied",
-                "proposal_id": proposal_id,
-                "category": category,
-                "new_limit": new_limit,
-                "message": f"Successfully updated '{category}' budget to ${new_limit:.2f}.",
-            })
-        else:
-            # Log budget_cancelled event: proposal ID, category, decision
-            log_event(
-                "budget_cancelled",
-                {
-                    "proposal_id": proposal_id,
-                    "category": category,
-                    "decision": "cancelled",
-                },
-            )
-
-            return json.dumps({
-                "status": "cancelled",
-                "proposal_id": proposal_id,
-                "message": "Budget change cancelled by user. No files were modified.",
-            })
-    except Exception as e:
-        return json.dumps({"error": str(e)})
-
 
 # ============================================================================
 # JSON Schemas for LLM Tool Calling
@@ -536,22 +455,7 @@ PROPOSE_BUDGET_CHANGE_SCHEMA = {
     },
 }
 
-APPLY_BUDGET_CHANGE_SCHEMA = {
-    "name": "apply_budget_change",
-    "description": "Applies a pending budget proposal after interactive user terminal confirmation. Must never be called directly by the model. Arguments: proposal_id (string). Result: JSON status of applied or cancelled.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "proposal_id": {
-                "type": "string",
-                "description": "Unique identifier of the pending proposal to confirm.",
-            },
-        },
-        "required": ["proposal_id"],
-    },
-}
-
-# Only schemas sent to the model (apply_budget_change is excluded)
+# Only schemas sent to the model
 TOOL_SCHEMAS = [
     GET_MONTHLY_SUMMARY_SCHEMA,
     SPENDING_BY_CATEGORY_SCHEMA,
@@ -570,5 +474,4 @@ TOOLS_BY_NAME = {
     "budget_status": budget_status,
     "find_possible_duplicates": find_possible_duplicates,
     "propose_budget_change": propose_budget_change,
-    "apply_budget_change": apply_budget_change,
 }

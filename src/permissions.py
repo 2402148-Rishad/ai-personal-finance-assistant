@@ -23,9 +23,6 @@ TOOL_TIERS = {
 
     # Proposal tools
     "propose_budget_change": Tier.PROPOSE,
-
-    # Apply tools (requires explicit out-of-band user confirmation, blocked for the model)
-    "apply_budget_change": Tier.APPLY,
 }
 
 

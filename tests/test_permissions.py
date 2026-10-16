@@ -1,10 +1,12 @@
-"""Unit tests for permission tiers and budget change proposal flow."""
+"""Unit tests for permission tiers and budget change proposal and approval flow."""
 
 import json
+from unittest.mock import MagicMock
 import pytest
 
 from src.permissions import Tier, TOOL_TIERS, check_permission
 import src.tools as tools_module
+import src.approvals as approvals_module
 
 
 @pytest.fixture
@@ -34,6 +36,11 @@ def temp_budget_env(tmp_path, monkeypatch):
     monkeypatch.setattr(tools_module, "PROPOSALS_PATH", temp_proposals)
     monkeypatch.setattr(tools_module, "LOGS_DIR", tmp_path)
 
+    # Monkeypatch the paths in src.approvals to use the temporary directory
+    monkeypatch.setattr(approvals_module, "BUDGETS_PATH", temp_budgets)
+    monkeypatch.setattr(approvals_module, "PROPOSALS_PATH", temp_proposals)
+    monkeypatch.setattr(approvals_module, "LOGS_DIR", tmp_path)
+
     return temp_budgets, temp_proposals
 
 
@@ -54,20 +61,24 @@ def test_proposal_does_not_change_budgets(temp_budget_env):
     assert content_before == content_after
 
 
-def test_typing_no_cancels_and_leaves_budgets_unchanged(temp_budget_env, monkeypatch):
-    """Test 6.2: Typing no cancels and leaves budgets.json unchanged."""
+def test_request_approval_and_cancelling_leaves_budgets_unchanged(temp_budget_env):
+    """Test 6.2: Any decision other than 'yes' cancels and leaves budgets.json unchanged."""
     temp_budgets, temp_proposals = temp_budget_env
     content_before = temp_budgets.read_text(encoding="utf-8")
 
     res = tools_module.propose_budget_change("Dining", 400.0)
     proposal_id = json.loads(res)["proposal_id"]
 
-    # Mock input to return 'no'
-    monkeypatch.setattr("builtins.input", lambda prompt="": "no")
+    req_data = approvals_module.request_approval(proposal_id)
+    assert req_data["status"] == "awaiting_approval"
+    assert req_data["proposal_id"] == proposal_id
+    assert req_data["category"] == "Dining"
+    assert req_data["old_limit"] == 300.0
+    assert req_data["new_limit"] == 400.0
 
-    apply_res = tools_module.apply_budget_change(proposal_id)
-    apply_data = json.loads(apply_res)
-    assert apply_data["status"] == "cancelled"
+    # Decision "no" cancels
+    confirm_data = approvals_module.confirm_approval(proposal_id, "no")
+    assert confirm_data["status"] == "cancelled"
 
     content_after = temp_budgets.read_text(encoding="utf-8")
     assert content_before == content_after
@@ -78,20 +89,19 @@ def test_typing_no_cancels_and_leaves_budgets_unchanged(temp_budget_env, monkeyp
     assert proposal_id in proposals
 
 
-def test_typing_yes_updates_budget_and_removes_proposal(temp_budget_env, monkeypatch):
-    """Test 6.3: Typing yes updates the limit in budgets.json and removes the proposal."""
+def test_confirm_approval_yes_updates_budget_and_removes_proposal(temp_budget_env):
+    """Test 6.3: Confirming with 'yes' updates the limit in budgets.json and removes the proposal."""
     temp_budgets, temp_proposals = temp_budget_env
 
     res = tools_module.propose_budget_change("Dining", 450.0)
     proposal_id = json.loads(res)["proposal_id"]
 
-    # Mock input to return 'yes'
-    monkeypatch.setattr("builtins.input", lambda prompt="": "yes")
+    req_data = approvals_module.request_approval(proposal_id)
+    assert req_data["status"] == "awaiting_approval"
 
-    apply_res = tools_module.apply_budget_change(proposal_id)
-    apply_data = json.loads(apply_res)
-    assert apply_data["status"] == "applied"
-    assert apply_data["new_limit"] == 450.0
+    confirm_data = approvals_module.confirm_approval(proposal_id, "yes")
+    assert confirm_data["status"] == "applied"
+    assert confirm_data["new_limit"] == 450.0
 
     # Verify budgets.json was updated
     with open(temp_budgets, "r", encoding="utf-8") as f:
@@ -123,13 +133,41 @@ def test_invalid_category_or_negative_limit_rejected(temp_budget_env):
 
 
 def test_check_permission_apply_budget_change_returns_false():
-    """Test 6.5: check_permission('apply_budget_change') returns False."""
+    """Test 6.5: check_permission('apply_budget_change') returns False and tool is not in TOOL_TIERS."""
     assert check_permission("apply_budget_change") is False
     assert check_permission("propose_budget_change") is True
     assert check_permission("get_monthly_summary") is True
     assert check_permission("unregistered_tool") is False
-    assert TOOL_TIERS["apply_budget_change"] == Tier.APPLY
+    assert "apply_budget_change" not in TOOL_TIERS
     assert TOOL_TIERS["propose_budget_change"] == Tier.PROPOSE
+
+
+def test_approvals_never_call_input(temp_budget_env, monkeypatch):
+    """Test 5.3: Assert that request_approval and confirm_approval never call input()."""
+    mock_input = MagicMock()
+    monkeypatch.setattr("builtins.input", mock_input)
+
+    res = tools_module.propose_budget_change("Dining", 380.0)
+    proposal_id = json.loads(res)["proposal_id"]
+
+    req_data = approvals_module.request_approval(proposal_id)
+    assert req_data["status"] == "awaiting_approval"
+    mock_input.assert_not_called()
+
+    conf_data = approvals_module.confirm_approval(proposal_id, "yes")
+    assert conf_data["status"] == "applied"
+    mock_input.assert_not_called()
+
+
+def test_approval_invalid_proposal_id(temp_budget_env):
+    """Test invalid or non-existent proposal ID returns error in request and confirm."""
+    req = approvals_module.request_approval("non_existent_id")
+    assert req["status"] == "error"
+    assert "error" in req
+
+    conf = approvals_module.confirm_approval("non_existent_id", "yes")
+    assert conf["status"] == "error"
+    assert "error" in conf
 
 
 def test_model_cannot_trigger_apply_budget_change(temp_budget_env, monkeypatch):
@@ -139,7 +177,6 @@ def test_model_cannot_trigger_apply_budget_change(temp_budget_env, monkeypatch):
     3.2) Assert input was never called, using a mock.
     3.3) Assert budgets.json is unchanged.
     """
-    from unittest.mock import MagicMock
     from google.genai import types
     from src.agent import run_agent
 
@@ -200,4 +237,3 @@ def test_model_cannot_trigger_apply_budget_change(temp_budget_env, monkeypatch):
     # 3.3) Assert budgets.json is unchanged
     budgets_after = temp_budgets.read_text(encoding="utf-8")
     assert budgets_before == budgets_after
-

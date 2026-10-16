@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from src.agent import run_agent
-from src.tools import apply_budget_change
+from src.approvals import request_approval, confirm_approval
 
 PROPOSALS_PATH = Path(__file__).resolve().parent / "logs" / "pending_proposals.json"
 
@@ -71,8 +71,16 @@ def main():
                     print("Usage: /apply <proposal_id>")
                     continue
                 proposal_id = parts[1].strip()
-                result = apply_budget_change(proposal_id)
-                print(result)
+                approval_req = request_approval(proposal_id)
+                if approval_req.get("status") == "error" or "error" in approval_req:
+                    print(json.dumps(approval_req))
+                    continue
+                print(f"Category:  {approval_req['category']}")
+                print(f"Old Limit: ${approval_req['old_limit']}")
+                print(f"New Limit: ${approval_req['new_limit']}")
+                answer = input("Type exactly 'yes' to confirm: ")
+                result = confirm_approval(proposal_id, answer)
+                print(json.dumps(result))
                 continue
 
             answer = run_agent(user_input)
