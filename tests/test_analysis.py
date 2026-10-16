@@ -131,9 +131,9 @@ class TestAnalysisTools:
         raw_res_1 = cashflow_projection(days_ahead=30, today=today_1)
         data_1 = json.loads(raw_res_1)
         assert "error" not in data_1
-        assert data_1["simulated_starting_balance"] == expected_balance_1
+        assert data_1["simulated_sandbox_balance"] == expected_balance_1
         assert data_1["total_bills"] == expected_bills_1
-        assert data_1["simulated_starting_balance"] == 7564.57
+        assert data_1["simulated_sandbox_balance"] == 7564.57
         assert data_1["total_bills"] == 1869.99
         assert "Daily spending uses all discretionary expenses in the period, including one-off costs such as the August medical charge. This makes the projection more conservative." in data_1["assumptions"]
 
@@ -149,9 +149,9 @@ class TestAnalysisTools:
         raw_res_2 = cashflow_projection(days_ahead=30, today=today_2)
         data_2 = json.loads(raw_res_2)
         assert "error" not in data_2
-        assert data_2["simulated_starting_balance"] == expected_balance_2
+        assert data_2["simulated_sandbox_balance"] == expected_balance_2
         assert data_2["total_bills"] == expected_bills_2
-        assert data_2["simulated_starting_balance"] == 6751.49
+        assert data_2["simulated_sandbox_balance"] == 6751.49
         assert data_2["total_bills"] == 1869.99
 
     def test_savings_recommendations_august(self):
@@ -201,7 +201,7 @@ class TestAnalysisTools:
 
         # 3. Cashflow Figures (Starting balance, bill total, daily discretionary average)
         raw_cf_tool = json.loads(cashflow_projection(30, "2026-08-31"))
-        tool_start_bal = f"${raw_cf_tool['simulated_starting_balance']:.2f}"
+        tool_start_bal = f"${raw_cf_tool['simulated_sandbox_balance']:.2f}"
         tool_bills_total = f"${raw_cf_tool['total_bills']:.2f}"
         tool_daily_disc = f"${raw_cf_tool['avg_daily_discretionary_spend']:.2f}"
 
@@ -244,7 +244,7 @@ class TestAnalysisTools:
             assert matched is True
         print("=" * 90 + "\n")
 
-        assert raw_cf_tool["simulated_starting_balance"] == 7564.57
+        assert raw_cf_tool["simulated_sandbox_balance"] == 7564.57
         assert raw_cf_tool["total_bills"] == 1869.99
         assert raw_cf_tool["avg_daily_discretionary_spend"] == 36.14
 
@@ -282,7 +282,15 @@ class TestAnalysisTools:
         data = json.loads(raw_res)
 
         assert "error" not in data
-        assert data["simulated_starting_balance"] == 10.00
+        assert data["simulated_sandbox_balance"] == 10.00
         assert data["total_bills"] == 1500.00
         assert data["lowest_balance"] < 0
         assert data["covers_all_bills"] is False
+
+    def test_cashflow_projection_balance_key_naming(self):
+        """Assert simulated_sandbox_balance is a key in the cashflow_projection result, and simulated_starting_balance is not."""
+        raw_res = cashflow_projection(days_ahead=30)
+        data = json.loads(raw_res)
+        assert "error" not in data
+        assert "simulated_sandbox_balance" in data
+        assert "simulated_starting_balance" not in data

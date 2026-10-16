@@ -246,3 +246,28 @@ def test_model_cannot_trigger_apply_budget_change(temp_budget_env, monkeypatch):
     # 3.3) Assert budgets.json is unchanged
     budgets_after = temp_budgets.read_text(encoding="utf-8")
     assert budgets_before == budgets_after
+
+
+def test_propose_budget_change_exceeding_twice_limit_rejected(temp_budget_env):
+    """propose_budget_change('Dining', 9999) must return status rejected, and no new entry in proposals file."""
+    temp_budgets, temp_proposals = temp_budget_env
+    temp_proposals.write_text("{}", encoding="utf-8")
+    content_before = temp_proposals.read_text(encoding="utf-8")
+
+    res = tools_module.propose_budget_change("Dining", 9999)
+    data = json.loads(res)
+    assert data.get("status") == "rejected"
+    assert "error" in data
+
+    content_after = temp_proposals.read_text(encoding="utf-8")
+    assert content_before == content_after
+
+
+def test_propose_budget_change_within_twice_limit_pending_confirmation(temp_budget_env):
+    """propose_budget_change('Dining', 500) must return status pending_confirmation."""
+    temp_budgets, temp_proposals = temp_budget_env
+    res = tools_module.propose_budget_change("Dining", 500)
+    data = json.loads(res)
+    assert data.get("status") == "pending_confirmation"
+    assert data.get("category") == "Dining"
+    assert data.get("new_limit") == 500.0

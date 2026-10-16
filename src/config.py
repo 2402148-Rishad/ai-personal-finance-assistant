@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 
 # Base paths
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = PROJECT_ROOT / "data"
+DATA_DIR = Path(os.getenv("FINANCE_DATA_DIR", PROJECT_ROOT / "data"))
 
 # Dataset paths
 TRANSACTIONS_PATH = DATA_DIR / "transactions.csv"

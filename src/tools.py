@@ -3,7 +3,9 @@
 import calendar
 from datetime import date, datetime, timedelta
 import json
+import os
 from pathlib import Path
+import re
 import uuid
 import pandas as pd
 
@@ -28,6 +30,84 @@ LOGS_DIR = PROJECT_ROOT / "logs"
 PROPOSALS_PATH = LOGS_DIR / "pending_proposals.json"
 
 
+def sanitize_description(desc) -> str:
+    """Sanitize transaction/bill description:
+    remove control characters and newlines, collapse whitespace, and cap at 80 characters.
+    Don't change amounts, dates, or categories.
+    """
+    if pd.isna(desc):
+        return ""
+    text = str(desc)
+    # Remove control characters and newlines
+    cleaned = re.sub(r"[\x00-\x1f\x7f]", " ", text)
+    # Collapse whitespace
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    # Cap at 80 characters
+    return cleaned[:80]
+
+
+def _get_transactions_path() -> Path:
+    cur = globals().get("TRANSACTIONS_PATH")
+    default_p = PROJECT_ROOT / "data" / "transactions.csv"
+    env_dir = os.getenv("FINANCE_DATA_DIR")
+    if env_dir:
+        if cur is not None and cur != default_p and cur != Path(env_dir) / "transactions.csv":
+            return cur
+        return Path(env_dir) / "transactions.csv"
+    return cur if cur is not None else default_p
+
+
+def _get_bills_path() -> Path:
+    cur = globals().get("BILLS_PATH")
+    default_p = PROJECT_ROOT / "data" / "bills.csv"
+    env_dir = os.getenv("FINANCE_DATA_DIR")
+    if env_dir:
+        if cur is not None and cur != default_p and cur != Path(env_dir) / "bills.csv":
+            return cur
+        return Path(env_dir) / "bills.csv"
+    return cur if cur is not None else default_p
+
+
+def _get_budgets_path() -> Path:
+    cur = globals().get("BUDGETS_PATH")
+    default_p = PROJECT_ROOT / "data" / "budgets.json"
+    env_dir = os.getenv("FINANCE_DATA_DIR")
+    if env_dir:
+        if cur is not None and cur != default_p and cur != Path(env_dir) / "budgets.json":
+            return cur
+        return Path(env_dir) / "budgets.json"
+    return cur if cur is not None else default_p
+
+
+def _get_account_path() -> Path:
+    cur = globals().get("ACCOUNT_PATH")
+    default_p = PROJECT_ROOT / "data" / "account.json"
+    env_dir = os.getenv("FINANCE_DATA_DIR")
+    if env_dir:
+        if cur is not None and cur != default_p and cur != Path(env_dir) / "account.json":
+            return cur
+        return Path(env_dir) / "account.json"
+    return cur if cur is not None else default_p
+
+
+def _load_transactions() -> pd.DataFrame:
+    path = _get_transactions_path()
+    df = pd.read_csv(path)
+    if "description" in df.columns:
+        df["description"] = df["description"].apply(sanitize_description)
+    return df
+
+
+def _load_bills() -> pd.DataFrame:
+    path = _get_bills_path()
+    df = pd.read_csv(path)
+    if "bill_name" in df.columns:
+        df["bill_name"] = df["bill_name"].apply(sanitize_description)
+    if "description" in df.columns:
+        df["description"] = df["description"].apply(sanitize_description)
+    return df
+
+
 # ============================================================================
 # Tool Implementations
 # ============================================================================
@@ -35,10 +115,11 @@ PROPOSALS_PATH = LOGS_DIR / "pending_proposals.json"
 def get_monthly_summary(month: str) -> str:
     """Calculate total income, expenses, net savings, and savings rate for a month."""
     try:
-        if not TRANSACTIONS_PATH.exists():
-            return json.dumps({"error": f"Transactions file not found at {TRANSACTIONS_PATH}"})
+        t_path = _get_transactions_path()
+        if not t_path.exists():
+            return json.dumps({"error": f"Transactions file not found at {t_path}"})
 
-        df = pd.read_csv(TRANSACTIONS_PATH)
+        df = _load_transactions()
         m_df = df[df["month"] == month]
         if m_df.empty:
             return json.dumps({"error": f"No transactions found for {month}"})
@@ -62,10 +143,11 @@ def get_monthly_summary(month: str) -> str:
 def spending_by_category(month: str) -> str:
     """Calculate total spending per category for a month, sorted largest first."""
     try:
-        if not TRANSACTIONS_PATH.exists():
-            return json.dumps({"error": f"Transactions file not found at {TRANSACTIONS_PATH}"})
+        t_path = _get_transactions_path()
+        if not t_path.exists():
+            return json.dumps({"error": f"Transactions file not found at {t_path}"})
 
-        df = pd.read_csv(TRANSACTIONS_PATH)
+        df = _load_transactions()
         m_df = df[df["month"] == month]
         if m_df.empty:
             return json.dumps({"error": f"No transactions found for {month}"})
@@ -92,10 +174,11 @@ def spending_by_category(month: str) -> str:
 def get_transactions(month: str, category: str | None = None) -> str:
     """List transactions for a month, optionally filtered by category."""
     try:
-        if not TRANSACTIONS_PATH.exists():
-            return json.dumps({"error": f"Transactions file not found at {TRANSACTIONS_PATH}"})
+        t_path = _get_transactions_path()
+        if not t_path.exists():
+            return json.dumps({"error": f"Transactions file not found at {t_path}"})
 
-        df = pd.read_csv(TRANSACTIONS_PATH)
+        df = _load_transactions()
         m_df = df[df["month"] == month]
         if m_df.empty:
             return json.dumps({"error": f"No transactions found for {month}"})
@@ -124,8 +207,9 @@ def upcoming_bills(today: str | None = None, days_ahead: int = 30) -> str:
         if today is None or not str(today).strip():
             today = AS_OF_DATE
 
-        if not BILLS_PATH.exists():
-            return json.dumps({"error": f"Bills file not found at {BILLS_PATH}"})
+        b_path = _get_bills_path()
+        if not b_path.exists():
+            return json.dumps({"error": f"Bills file not found at {b_path}"})
 
         try:
             today_dt = date.fromisoformat(today)
@@ -135,7 +219,7 @@ def upcoming_bills(today: str | None = None, days_ahead: int = 30) -> str:
         if days_ahead < 0:
             return json.dumps({"error": "days_ahead must be a non-negative integer."})
 
-        bills_df = pd.read_csv(BILLS_PATH)
+        bills_df = _load_bills()
         if bills_df.empty:
             return json.dumps({"error": "No bills found in bills.csv"})
 
@@ -169,15 +253,17 @@ def upcoming_bills(today: str | None = None, days_ahead: int = 30) -> str:
 def budget_status(month: str) -> str:
     """Compare monthly actual spending against budget limits for all categories."""
     try:
-        if not BUDGETS_PATH.exists():
-            return json.dumps({"error": f"Budgets file not found at {BUDGETS_PATH}"})
-        if not TRANSACTIONS_PATH.exists():
-            return json.dumps({"error": f"Transactions file not found at {TRANSACTIONS_PATH}"})
+        b_path = _get_budgets_path()
+        if not b_path.exists():
+            return json.dumps({"error": f"Budgets file not found at {b_path}"})
+        t_path = _get_transactions_path()
+        if not t_path.exists():
+            return json.dumps({"error": f"Transactions file not found at {t_path}"})
 
-        with open(BUDGETS_PATH, "r", encoding="utf-8") as f:
+        with open(b_path, "r", encoding="utf-8") as f:
             budgets = json.load(f)
 
-        df = pd.read_csv(TRANSACTIONS_PATH)
+        df = _load_transactions()
         m_df = df[df["month"] == month]
         if m_df.empty:
             return json.dumps({"error": f"No transactions found for {month}"})
@@ -215,10 +301,11 @@ def budget_status(month: str) -> str:
 def find_possible_duplicates(month: str) -> str:
     """Identify duplicate transactions with identical date, description, and amount."""
     try:
-        if not TRANSACTIONS_PATH.exists():
-            return json.dumps({"error": f"Transactions file not found at {TRANSACTIONS_PATH}"})
+        t_path = _get_transactions_path()
+        if not t_path.exists():
+            return json.dumps({"error": f"Transactions file not found at {t_path}"})
 
-        df = pd.read_csv(TRANSACTIONS_PATH)
+        df = _load_transactions()
         m_df = df[df["month"] == month]
         if m_df.empty:
             return json.dumps({"error": f"No transactions found for {month}"})
@@ -256,10 +343,11 @@ def find_possible_duplicates(month: str) -> str:
 def propose_budget_change(category: str, new_limit: float) -> str:
     """Propose a change to a budget category limit, saving to pending proposals without modifying budgets.json."""
     try:
-        if not BUDGETS_PATH.exists():
-            return json.dumps({"error": f"Budgets file not found at {BUDGETS_PATH}"})
+        b_path = _get_budgets_path()
+        if not b_path.exists():
+            return json.dumps({"error": f"Budgets file not found at {b_path}"})
 
-        with open(BUDGETS_PATH, "r", encoding="utf-8") as f:
+        with open(b_path, "r", encoding="utf-8") as f:
             budgets = json.load(f)
 
         # Validate that category exists in budgets.json
@@ -282,6 +370,25 @@ def propose_budget_change(category: str, new_limit: float) -> str:
             return json.dumps({"error": f"New limit must be greater than 0. Received: {limit_val}"})
 
         old_limit = float(budgets[matched_cat])
+        max_allowed = round(old_limit * 2, 2)
+        if limit_val > max_allowed:
+            log_event(
+                "budget_rejected",
+                {
+                    "category": matched_cat,
+                    "current_limit": round(old_limit, 2),
+                    "new_limit": round(limit_val, 2),
+                    "maximum_allowed": max_allowed,
+                },
+            )
+            return json.dumps({
+                "error": f"Request rejected: new limit ${limit_val:.2f} exceeds maximum allowed of ${max_allowed:.2f} for category '{matched_cat}' (current limit: ${old_limit:.2f}).",
+                "category": matched_cat,
+                "current_limit": round(old_limit, 2),
+                "maximum_allowed": max_allowed,
+                "status": "rejected",
+            })
+
         proposal_id = f"prop_{uuid.uuid4().hex[:8]}"
         timestamp = datetime.now().isoformat()
 
@@ -342,12 +449,15 @@ def cashflow_projection(days_ahead: int = 30, today: str | None = None) -> str:
         if today is None or not str(today).strip():
             today = AS_OF_DATE
 
-        if not ACCOUNT_PATH.exists():
-            return json.dumps({"error": f"Account file not found at {ACCOUNT_PATH}"})
-        if not TRANSACTIONS_PATH.exists():
-            return json.dumps({"error": f"Transactions file not found at {TRANSACTIONS_PATH}"})
-        if not BILLS_PATH.exists():
-            return json.dumps({"error": f"Bills file not found at {BILLS_PATH}"})
+        a_path = _get_account_path()
+        if not a_path.exists():
+            return json.dumps({"error": f"Account file not found at {a_path}"})
+        t_path = _get_transactions_path()
+        if not t_path.exists():
+            return json.dumps({"error": f"Transactions file not found at {t_path}"})
+        b_path = _get_bills_path()
+        if not b_path.exists():
+            return json.dumps({"error": f"Bills file not found at {b_path}"})
 
         try:
             today_dt = date.fromisoformat(today)
@@ -357,15 +467,15 @@ def cashflow_projection(days_ahead: int = 30, today: str | None = None) -> str:
         if days_ahead < 0:
             return json.dumps({"error": "days_ahead must be a non-negative integer."})
 
-        with open(ACCOUNT_PATH, "r", encoding="utf-8") as f:
+        with open(a_path, "r", encoding="utf-8") as f:
             account_data = json.load(f)
         opening_balance = float(account_data.get("opening_balance", 0.0))
 
-        df = pd.read_csv(TRANSACTIONS_PATH)
+        df = _load_transactions()
         if df.empty:
             return json.dumps({"error": "No transactions found in transactions.csv"})
 
-        bills_df = pd.read_csv(BILLS_PATH)
+        bills_df = _load_bills()
         if bills_df.empty:
             return json.dumps({"error": "No bills found in bills.csv"})
 
@@ -373,7 +483,7 @@ def cashflow_projection(days_ahead: int = 30, today: str | None = None) -> str:
         past_tx = df[df["date"] <= today]
         inc_to_today = float(past_tx[past_tx["type"] == "income"]["amount"].sum())
         exp_to_today = float(past_tx[past_tx["type"] == "expense"]["amount"].sum())
-        simulated_starting_balance = round(opening_balance + inc_to_today - exp_to_today, 2)
+        simulated_sandbox_balance = round(opening_balance + inc_to_today - exp_to_today, 2)
 
         # 2.1.2 Scheduled bills: reuse the same window and helper logic as upcoming_bills
         bill_cats = set(bills_df["category"].dropna().unique())
@@ -432,7 +542,7 @@ def cashflow_projection(days_ahead: int = 30, today: str | None = None) -> str:
             bills_by_date.setdefault(b["due_date"], 0.0)
             bills_by_date[b["due_date"]] += b["amount"]
 
-        current_balance = simulated_starting_balance
+        current_balance = simulated_sandbox_balance
         lowest_balance = current_balance
         lowest_balance_date = today_dt.isoformat()
 
@@ -460,7 +570,7 @@ def cashflow_projection(days_ahead: int = 30, today: str | None = None) -> str:
         covers_all_bills = bool(lowest_balance >= 0.0)
 
         assumptions = [
-            f"Simulated starting balance is ${simulated_starting_balance:.2f} as of {today}.",
+            f"Simulated sandbox balance is ${simulated_sandbox_balance:.2f} as of {today}.",
             f"Expected recurring monthly income is ${avg_monthly_income:.2f} on day {pay_day} of each month.",
             f"Average daily discretionary spend is ${avg_daily_discretionary_spend:.2f} based on non-bill categories across past transaction months.",
             f"Scheduled bills total ${total_bills:.2f} across {len(scheduled_bills)} bills due in the {days_ahead}-day horizon.",
@@ -469,7 +579,7 @@ def cashflow_projection(days_ahead: int = 30, today: str | None = None) -> str:
 
         return json.dumps({
             "as_of": today,
-            "simulated_starting_balance": simulated_starting_balance,
+            "simulated_sandbox_balance": simulated_sandbox_balance,
             "horizon_days": days_ahead,
             "scheduled_bills": scheduled_bills,
             "total_bills": total_bills,
@@ -488,10 +598,11 @@ def cashflow_projection(days_ahead: int = 30, today: str | None = None) -> str:
 def detect_spending_spikes(month: str) -> str:
     """Compare each expense category with the previous month and flag spikes (>50% increase AND >=$50 absolute increase)."""
     try:
-        if not TRANSACTIONS_PATH.exists():
-            return json.dumps({"error": f"Transactions file not found at {TRANSACTIONS_PATH}"})
+        t_path = _get_transactions_path()
+        if not t_path.exists():
+            return json.dumps({"error": f"Transactions file not found at {t_path}"})
 
-        df = pd.read_csv(TRANSACTIONS_PATH)
+        df = _load_transactions()
         m_df = df[(df["month"] == month) & (df["type"] == "expense")]
         if m_df.empty:
             return json.dumps({"error": f"No transactions found for {month}"})
@@ -545,15 +656,17 @@ def detect_spending_spikes(month: str) -> str:
 def savings_recommendations(month: str) -> str:
     """Generate rule-based financial advice and savings recommendations for a given month."""
     try:
-        if not TRANSACTIONS_PATH.exists():
-            return json.dumps({"error": f"Transactions file not found at {TRANSACTIONS_PATH}"})
-        if not BUDGETS_PATH.exists():
-            return json.dumps({"error": f"Budgets file not found at {BUDGETS_PATH}"})
+        t_path = _get_transactions_path()
+        if not t_path.exists():
+            return json.dumps({"error": f"Transactions file not found at {t_path}"})
+        b_path = _get_budgets_path()
+        if not b_path.exists():
+            return json.dumps({"error": f"Budgets file not found at {b_path}"})
 
-        with open(BUDGETS_PATH, "r", encoding="utf-8") as f:
+        with open(b_path, "r", encoding="utf-8") as f:
             budgets = json.load(f)
 
-        df = pd.read_csv(TRANSACTIONS_PATH)
+        df = _load_transactions()
         m_df = df[df["month"] == month]
         if m_df.empty:
             return json.dumps({"error": f"No transactions found for {month}"})
@@ -848,7 +961,7 @@ PROPOSE_BUDGET_CHANGE_SCHEMA = {
 
 CASHFLOW_PROJECTION_SCHEMA = {
     "name": "cashflow_projection",
-    "description": "Simulates and projects day-by-day cashflow, scheduled upcoming bills, expected recurring income, and sandbox account balance over a forward horizon (default 30 days). Use this tool whenever the user asks about future cashflow, whether they can cover upcoming bills, when their balance will be lowest, or asks for their simulated sandbox account balance. Arguments: days_ahead (integer, default 30), today (string YYYY-MM-DD, defaults to the simulated sandbox date). Result fields to quote: simulated_starting_balance, total_bills, expected_income, projected_end_balance, lowest_balance, lowest_balance_date, covers_all_bills. Quote totals and balances only from the tool's fields; never calculate or estimate balances yourself.",
+    "description": "Simulates and projects day-by-day cashflow, scheduled upcoming bills, expected recurring income, and sandbox account balance over a forward horizon (default 30 days). Use this tool whenever the user asks about future cashflow, whether they can cover upcoming bills, when their balance will be lowest, or asks for their simulated sandbox account balance. Arguments: days_ahead (integer, default 30), today (string YYYY-MM-DD, defaults to the simulated sandbox date). Result fields to quote: simulated_sandbox_balance, total_bills, expected_income, projected_end_balance, lowest_balance, lowest_balance_date, covers_all_bills. Quote totals and balances only from the tool's fields; never calculate or estimate balances yourself.",
     "parameters": {
         "type": "object",
         "properties": {
