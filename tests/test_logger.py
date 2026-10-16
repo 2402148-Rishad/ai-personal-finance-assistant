@@ -54,7 +54,7 @@ def test_log_line_never_contains_api_key(temp_logs_dir, monkeypatch):
 
     Use a fake key value in the test, and check that it doesn't appear in the log file.
     """
-    fake_api_key = "AIzaSyFakeSecretGeminiKey9988776655"
+    fake_api_key = "FAKE_TEST_KEY_DO_NOT_USE"
     monkeypatch.setattr(config_module, "GEMINI_API_KEY", fake_api_key)
     monkeypatch.setenv("GEMINI_API_KEY", fake_api_key)
 

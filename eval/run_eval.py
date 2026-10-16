@@ -17,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.agent import run_agent
+from src.logger import log_event
 from src.config import PROJECT_ROOT, TRANSACTIONS_PATH, BILLS_PATH, BUDGETS_PATH, AS_OF_DATE
 
 QUESTIONS_FILE = PROJECT_ROOT / "eval" / "questions.json"
@@ -316,7 +317,7 @@ def run_agent_with_retry(question: str) -> tuple[str, list[str], bool]:
     for attempt in range(len(backoff_delays) + 1):
         captured_stdout = io.StringIO()
         err_occurred = False
-        err_msg = ""
+        err_class = "ProviderError"
         try:
             with contextlib.redirect_stdout(captured_stdout):
                 result = run_agent(question, history=None)
@@ -326,7 +327,7 @@ def run_agent_with_retry(question: str) -> tuple[str, list[str], bool]:
 
             if is_provider_error(answer):
                 err_occurred = True
-                err_msg = answer
+                err_class = "ServerError" if "503" in answer else "ProviderError"
             else:
                 return answer, tool_calls, False
 
@@ -334,14 +335,29 @@ def run_agent_with_retry(question: str) -> tuple[str, list[str], bool]:
             out_str = captured_stdout.getvalue()
             tool_calls = [line.strip() for line in out_str.splitlines() if line.startswith("[Tool Call]")]
             err_occurred = True
-            err_msg = str(e)
+            err_class = e.__class__.__name__
 
         if err_occurred:
             if attempt < len(backoff_delays):
                 delay = backoff_delays[attempt]
-                print(f"   [Provider error detected: {err_msg[:60]}...] Waiting {delay}s before retry {attempt + 1}/3...")
+                log_event(
+                    "provider_retry",
+                    {
+                        "attempt": attempt + 1,
+                        "wait_seconds": delay,
+                        "error_class": err_class,
+                    },
+                )
+                print(f"   [Provider error detected: {err_class}] Waiting {delay}s before retry {attempt + 1}/3...")
                 time.sleep(delay)
             else:
+                log_event(
+                    "provider_error_final",
+                    {
+                        "attempts": len(backoff_delays) + 1,
+                        "error_class": err_class,
+                    },
+                )
                 # All 3 retries failed. Do not treat error text as answer.
                 return "", tool_calls, True
 

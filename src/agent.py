@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 import json
+import time
 from google import genai
 from google.genai import types
 
@@ -93,6 +94,16 @@ def trim_history(history: list, max_turns: int = 10) -> list:
     return candidate
 
 
+def _is_provider_error(exc: Exception) -> bool:
+    """Check if exception is a transient provider error."""
+    name = exc.__class__.__name__
+    msg = str(exc)
+    for kw in ["503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "500", "INTERNAL", "ServerError"]:
+        if kw in name or kw in msg:
+            return True
+    return False
+
+
 def run_agent(question: str, history: list | None = None) -> AgentResult:
     """Execute the agent loop to answer a user question using available tools, permission checks, and logging."""
     # 2.1) question: log the user's question at the start of run_agent
@@ -129,11 +140,38 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
         # Run the loop up to MAX_AGENT_STEPS turns
         for step in range(MAX_AGENT_STEPS):
             # Call the Gemini model with conversation history and tool configuration
-            response = client.models.generate_content(
-                model=MODEL,
-                contents=convo_history,
-                config=tool_config,
-            )
+            backoff_delays = [15, 30, 60]
+            response = None
+            for attempt_idx in range(len(backoff_delays) + 1):
+                try:
+                    response = client.models.generate_content(
+                        model=MODEL,
+                        contents=convo_history,
+                        config=tool_config,
+                    )
+                    break
+                except Exception as exc:
+                    if _is_provider_error(exc) and attempt_idx < len(backoff_delays):
+                        wait_sec = backoff_delays[attempt_idx]
+                        log_event(
+                            "provider_retry",
+                            {
+                                "attempt": attempt_idx + 1,
+                                "wait_seconds": wait_sec,
+                                "error_class": exc.__class__.__name__,
+                            },
+                        )
+                        time.sleep(wait_sec)
+                    else:
+                        if _is_provider_error(exc):
+                            log_event(
+                                "provider_error_final",
+                                {
+                                    "attempts": attempt_idx + 1,
+                                    "error_class": exc.__class__.__name__,
+                                },
+                            )
+                        raise
 
             # Append model response to conversation history as-is
             if response.candidates and response.candidates[0].content:
