@@ -18,7 +18,8 @@ def get_do_this_next_banner(workspace: Path | str | None = None) -> str:
         pending = list_pending(workspace=workspace)
         if pending:
             n = len(pending)
-            return f"{n} changes are waiting for approval. Open Inbox."
+            change_str = "1 change is" if n == 1 else f"{n} changes are"
+            return f"{change_str} waiting for approval."
     except Exception:
         pass
 

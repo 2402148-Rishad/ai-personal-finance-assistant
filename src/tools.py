@@ -840,6 +840,15 @@ def propose_add_transactions(items: list | str) -> str:
             if not isinstance(item, dict):
                 return json.dumps({"error": f"Item at index {idx} must be a dictionary.", "status": "error"})
 
+            # Description default: when the user gives no description, use "<Category> expense", never the bare category name
+            desc = item.get("description")
+            cat = item.get("category")
+            if not desc or not str(desc).strip():
+                if cat and str(cat).strip():
+                    item["description"] = f"{str(cat).strip()} expense"
+            elif cat and str(desc).strip().lower() == str(cat).strip().lower():
+                item["description"] = f"{str(cat).strip()} expense"
+
             # Check missing fields
             missing_fields = []
             for req in ("date", "description", "amount", "category", "type"):

@@ -45,6 +45,12 @@ from src.validators import (
     validate_text,
     get_workspace_categories,
 )
+from src.formatters import (
+    format_date_human,
+    format_expiry,
+    format_card_value,
+    get_next_undo_line,
+)
 
 st.set_page_config(
     page_title="Fin",
@@ -169,13 +175,11 @@ def render_column_header(title: str, button_label: str | None = None, button_key
     return False
 
 
-
-# Two-column layout: Chat (left) and Your month (right)
 left_col, right_col = st.columns([3, 2], gap="large")
 
 with left_col:
     # Column header using helper function
-    if render_column_header("Chat", button_label="Clear", button_key="clear_chat_button"):
+    if render_column_header("Chat", button_label="Clear chat", button_key="clear_chat_button"):
         st.session_state.display = []
         st.session_state.history = []
         st.session_state.input_key += 1
@@ -183,7 +187,23 @@ with left_col:
 
     # "Do this next" banner above the chat
     banner_text = get_do_this_next_banner(workspace=session_ws)
-    st.info(banner_text)
+    st.markdown("##### Do this next")
+    has_pending = False
+    try:
+        has_pending = bool(list_pending(workspace=session_ws))
+    except Exception:
+        pass
+
+    if has_pending:
+        b_c1, b_c2 = st.columns([3, 1], vertical_alignment="center")
+        with b_c1:
+            st.info(banner_text)
+        with b_c2:
+            if st.button("Open Inbox", key="open_inbox_banner_btn"):
+                st.session_state.active_tab = "Inbox"
+                st.rerun()
+    else:
+        st.info(banner_text)
 
     chat_error_placeholder = st.empty()
 
@@ -278,21 +298,38 @@ with left_col:
                         st.caption("Fin")
                         st.markdown(escape_dollars(a_text))
 
-                        # Task 3: "How I got this" expander & summary caption
+                        # "How I got this" expander
                         tool_calls = item.get("tool_calls", [])
                         if tool_calls:
-                            for tc in tool_calls:
-                                name = tc.get("name", "")
-                                arguments = tc.get("arguments", {})
-                                st.caption(escape_dollars(f"`{name}({arguments})`"))
-
                             with st.expander("How I got this"):
                                 for tc in tool_calls:
                                     t_name = tc.get("name", "")
                                     t_args = tc.get("arguments", {})
                                     t_res = tc.get("result", {})
-                                    st.markdown(f"**Tool:** `{t_name}`")
-                                    st.markdown(f"**Arguments:** `{json.dumps(t_args)}`")
+                                    st.caption(f"Tool: {t_name}")
+                                    st.markdown(f"**{t_name}**")
+                                    if isinstance(t_args, dict) and t_args:
+                                        st.markdown("**Arguments:**")
+                                        for arg_k, arg_v in t_args.items():
+                                            if isinstance(arg_v, list):
+                                                st.markdown(f"- **{arg_k}:**")
+                                                for list_item in arg_v:
+                                                    if isinstance(list_item, dict):
+                                                        item_str = ", ".join(f"{k}: {v}" for k, v in list_item.items())
+                                                        st.markdown(f"  - {escape_dollars(item_str)}")
+                                                    else:
+                                                        st.markdown(f"  - {escape_dollars(str(list_item))}")
+                                            elif isinstance(arg_v, dict):
+                                                st.markdown(f"- **{arg_k}:**")
+                                                for sub_k, sub_v in arg_v.items():
+                                                    st.markdown(f"  - {sub_k}: {escape_dollars(str(sub_v))}")
+                                            else:
+                                                st.markdown(f"- **{arg_k}:** {escape_dollars(str(arg_v))}")
+                                    elif t_args:
+                                        st.markdown(f"- **Arguments:** {escape_dollars(str(t_args))}")
+                                    else:
+                                        st.caption("*(no arguments)*")
+
                                     if isinstance(t_res, dict):
                                         key_nums = []
                                         for k, v in t_res.items():
@@ -354,15 +391,6 @@ with left_col:
                                 if after_val is None and "new_limit" in prop:
                                     after_val = prop.get("new_limit")
 
-                                def _fmt_card(v):
-                                    if v is None:
-                                        return "*(none)*"
-                                    if isinstance(v, (int, float)):
-                                        return f"${float(v):,.2f}"
-                                    if isinstance(v, (dict, list)):
-                                        return json.dumps(v)
-                                    return str(v)
-
                                 with st.container(border=True):
                                     st.markdown(f"**Fin proposed: {kind_str}** (`{p_id}`)")
                                     m_c1, m_c2 = st.columns([3, 2])
@@ -376,13 +404,13 @@ with left_col:
                                         else:
                                             st.markdown("Risk: **:green[LOW]**")
                                     with m_c2:
-                                        st.caption(f"Expires at: {expires_at}")
+                                        st.caption(format_expiry(expires_at, now_dt))
 
                                     c_pv1, c_pv2 = st.columns(2)
                                     with c_pv1:
-                                        st.write(f"**Before:** {_fmt_card(before_val)}")
+                                        st.write(f"**Before:** {format_card_value(before_val)}")
                                     with c_pv2:
-                                        st.write(f"**After:** {_fmt_card(after_val)}")
+                                        st.write(f"**After:** {format_card_value(after_val)}")
 
                                     payload = prop.get("payload", {})
                                     if isinstance(payload, dict) and payload.get("category"):
@@ -536,11 +564,99 @@ def format_audit_line_english(rec: dict) -> str:
 with right_col:
     pending_items = list_pending(workspace=session_ws)
     pending_count = len(pending_items)
+    inbox_label = f"Inbox ({pending_count})"
+    tab_labels = ["Overview", "Ledger", "Plan", inbox_label]
+
+    cur_active = st.session_state.get("active_tab", "Overview")
+    if cur_active in ["Inbox", "inbox"] or (cur_active and str(cur_active).startswith("Inbox")):
+        default_tab = inbox_label
+    elif cur_active in tab_labels:
+        default_tab = cur_active
+    else:
+        default_tab = "Overview"
+
     tab_overview, tab_ledger, tab_plan, tab_inbox = st.tabs(
-        ["Overview", "Ledger", "Plan", f"Inbox ({pending_count})"]
+        tab_labels, default=default_tab
     )
 
     with tab_overview:
+        # Demo checklist: 5 steps ticked when audit.jsonl has the matching human action
+        all_props = read_proposals(workspace=session_ws)
+        audit_recs = read_audit(workspace=session_ws)
+
+        # 1. Add an expense in chat (proposal created or in audit log)
+        step1_done = any(
+            isinstance(p, dict) and p.get("kind") == "add_transactions"
+            for p in all_props.values()
+        ) or any(
+            r.get("action") in ("approve_add_transactions", "add_transaction", "import_transactions")
+            or r.get("kind") == "add_transactions"
+            for r in audit_recs
+        )
+
+        # 2. Approve it (approve action in audit log)
+        step2_done = any(
+            r.get("action") in ("approve_add_transactions", "approve_proposal")
+            or (str(r.get("action", "")).startswith("approve_") and r.get("source") == "human")
+            for r in audit_recs
+        )
+
+        # 3. Change its category in Ledger (update action in audit log)
+        step3_done = any(
+            r.get("action") in ("update_transaction", "approve_update_transaction")
+            for r in audit_recs
+        )
+
+        # 4. Propose a budget change in Plan (budget_change proposal created or in audit log)
+        step4_done = any(
+            isinstance(p, dict) and p.get("kind") == "budget_change"
+            for p in all_props.values()
+        ) or any(
+            r.get("action") == "approve_budget_change"
+            or r.get("kind") == "budget_change"
+            or (
+                r.get("action") == "reject_proposal"
+                and (
+                    (isinstance(r.get("before"), dict) and isinstance(r["before"].get("proposal"), dict) and r["before"]["proposal"].get("kind") == "budget_change")
+                    or (isinstance(r.get("before"), dict) and r["before"].get("kind") == "budget_change")
+                )
+            )
+            for r in audit_recs
+        )
+
+        # 5. Reject it (reject action in audit log)
+        step5_done = any(
+            r.get("action") == "reject_proposal"
+            for r in audit_recs
+        )
+
+        all_steps_done = (
+            step1_done and step2_done and step3_done and step4_done and step5_done
+        )
+
+        if not all_steps_done:
+            st.session_state["demo_step_1"] = step1_done
+            st.session_state["demo_step_2"] = step2_done
+            st.session_state["demo_step_3"] = step3_done
+            st.session_state["demo_step_4"] = step4_done
+            st.session_state["demo_step_5"] = step5_done
+
+            with st.container(border=True):
+                st.markdown("### Your demo checklist")
+                st.checkbox("1. Add an expense in chat", disabled=True, key="demo_step_1")
+                st.checkbox("2. Approve it", disabled=True, key="demo_step_2")
+                st.checkbox("3. Change its category in Ledger", disabled=True, key="demo_step_3")
+                st.checkbox("4. Propose a budget change in Plan", disabled=True, key="demo_step_4")
+                st.checkbox("5. Reject it", disabled=True, key="demo_step_5")
+        else:
+            if st.button("Start again", key="demo_start_again_btn"):
+                reset_workspace(st.session_state.session_id)
+                set_active_workspace(session_ws)
+                st.session_state.display = []
+                st.session_state.history = []
+                st.session_state.input_key += 1
+                st.rerun()
+
         # Month selector dynamically built from get_data_overview()
         overview = get_data_overview()
         available_months = overview.get("months") or ["2026-06", "2026-07", "2026-08"]
@@ -679,8 +795,15 @@ with right_col:
                 if add_submit:
                     ok_d, val_d = validate_date(add_date, workspace=session_ws)
                     ok_a, val_a = validate_amount(add_amount)
-                    ok_desc, val_desc = validate_text(add_desc)
                     ok_c, val_c = validate_category(add_cat, workspace=session_ws)
+
+                    effective_desc = add_desc.strip() if add_desc else ""
+                    if not effective_desc:
+                        effective_desc = f"{add_cat} expense"
+                    elif add_cat and effective_desc.lower() == add_cat.lower():
+                        effective_desc = f"{add_cat} expense"
+
+                    ok_desc, val_desc = validate_text(effective_desc)
 
                     if not ok_a:
                         st.error(f"Error: {val_a}")
@@ -722,6 +845,11 @@ with right_col:
                         r_type = str(row.get("type", "expense")).strip().lower()
                         if r_type not in ("expense", "income"):
                             r_type = "expense"
+
+                        if not r_desc:
+                            r_desc = f"{r_cat} expense" if r_cat else "General expense"
+                        elif r_cat and r_desc.lower() == r_cat.lower():
+                            r_desc = f"{r_cat} expense"
 
                         ok_d, clean_d = validate_date(r_date, workspace=session_ws)
                         ok_a, clean_a = validate_amount(r_amt)
@@ -787,9 +915,23 @@ with right_col:
             all_known = ["All"] + sorted(get_workspace_categories(session_ws))
             filter_cat = st.selectbox("Category", options=all_known, key="ledger_filter_category")
         with col_f2:
-            filter_min_amt = st.number_input("Min amount ($)", min_value=0.0, value=0.0, step=10.0, key="ledger_filter_min")
+            filter_min_amt = st.number_input(
+                "Min amount ($)",
+                min_value=0.0,
+                value=None,
+                placeholder="Any",
+                step=10.0,
+                key="ledger_filter_min",
+            )
         with col_f3:
-            filter_max_amt = st.number_input("Max amount ($)", min_value=0.0, value=0.0, step=10.0, key="ledger_filter_max")
+            filter_max_amt = st.number_input(
+                "Max amount ($)",
+                min_value=0.0,
+                value=None,
+                placeholder="Any",
+                step=10.0,
+                key="ledger_filter_max",
+            )
 
         col_date1, col_date2 = st.columns(2)
         with col_date1:
@@ -802,8 +944,8 @@ with right_col:
             category=filter_cat,
             start_date=filter_start_date,
             end_date=filter_end_date,
-            min_amount=filter_min_amt if filter_min_amt > 0 else None,
-            max_amount=filter_max_amt if filter_max_amt > 0 else None,
+            min_amount=filter_min_amt if (filter_min_amt is not None and filter_min_amt > 0) else None,
+            max_amount=filter_max_amt if (filter_max_amt is not None and filter_max_amt > 0) else None,
             tx_type=filter_type,
             workspace=session_ws,
         )
@@ -816,57 +958,90 @@ with right_col:
             avail_cols = [c for c in display_cols if c in filtered_df.columns]
             st.dataframe(filtered_df[avail_cols], use_container_width=True)
 
-            # Edit and Delete section
-            with st.expander("Edit or Delete a Transaction", expanded=False):
-                tx_ids = filtered_df["id"].tolist() if "id" in filtered_df.columns else []
-                if tx_ids:
-                    tx_dict = {str(row["id"]): row for _, row in filtered_df.iterrows()}
-                    selected_tx_id = st.selectbox(
-                        "Choose transaction",
-                        options=tx_ids,
-                        format_func=lambda tid: f"{tid}: {tx_dict[tid].get('date', '')} - {tx_dict[tid].get('description', '')} (${tx_dict[tid].get('amount', 0):,.2f})",
-                        key="ledger_select_edit_tx",
-                    )
-                    sel_row = tx_dict[selected_tx_id]
+            # Pick a transaction to edit
+            tx_ids = [str(row["id"]) for _, row in filtered_df.iterrows()] if "id" in filtered_df.columns else []
+            if tx_ids:
+                tx_dict = {str(row["id"]): row for _, row in filtered_df.iterrows()}
+                tx_fmt_map = {}
+                tx_by_fmt = {}
+                for tid, r in tx_dict.items():
+                    d_str = format_date_human(r.get("date", ""))
+                    amt = float(r.get("amount", 0.0))
+                    cat = str(r.get("category", "")).strip()
+                    desc = str(r.get("description", "")).strip()
+                    fmt_s = f"{d_str} · ${amt:,.2f} · {cat} · {desc}"
+                    tx_fmt_map[tid] = fmt_s
+                    tx_fmt_map[fmt_s] = fmt_s
+                    tx_by_fmt[fmt_s] = tid
 
-                    edit_tab, delete_tab = st.tabs(["Edit", "Delete"])
-                    with edit_tab:
-                        with st.form(key=f"edit_form_{selected_tx_id}"):
+                def _format_tx_opt(val):
+                    if not val:
+                        return ""
+                    return tx_fmt_map.get(str(val), str(val))
+
+                selected_tx_val = st.selectbox(
+                    "Pick a transaction to edit",
+                    options=tx_ids,
+                    index=None,
+                    placeholder="Choose a transaction...",
+                    format_func=_format_tx_opt,
+                    key="ledger_select_edit_tx",
+                )
+
+                selected_tx_id = selected_tx_val if (selected_tx_val in tx_dict) else tx_by_fmt.get(selected_tx_val)
+                if selected_tx_id and selected_tx_id in tx_dict:
+                    sel_row = tx_dict[selected_tx_id]
+                    with st.form(key=f"edit_form_{selected_tx_id}"):
+                        col_ed1, col_ed2 = st.columns([2, 1])
+                        with col_ed1:
                             e_date = st.text_input("Date (YYYY-MM-DD)", value=str(sel_row.get("date", "")), key=f"edit_date_{selected_tx_id}")
-                            e_desc = st.text_input("Description", value=str(sel_row.get("description", "")), key=f"edit_desc_{selected_tx_id}")
-                            e_amt = st.text_input("Amount ($)", value=str(sel_row.get("amount", "")), key=f"edit_amt_{selected_tx_id}")
+                        with col_ed2:
                             e_type = st.selectbox("Type", options=["expense", "income"], index=0 if str(sel_row.get("type", "")).lower() == "expense" else 1, key=f"edit_type_{selected_tx_id}")
+
+                        e_desc = st.text_input("Description", value=str(sel_row.get("description", "")), key=f"edit_desc_{selected_tx_id}")
+
+                        col_ea, col_ec = st.columns([1, 1])
+                        with col_ea:
+                            e_amt = st.text_input("Amount ($)", value=str(sel_row.get("amount", "")), key=f"edit_amt_{selected_tx_id}")
+                        with col_ec:
                             all_cats = sorted(get_workspace_categories(session_ws))
                             cur_cat = str(sel_row.get("category", ""))
                             c_idx = all_cats.index(cur_cat) if cur_cat in all_cats else 0
                             e_cat = st.selectbox("Category", options=all_cats, index=c_idx, key=f"edit_cat_{selected_tx_id}")
 
-                            if st.form_submit_button("Save Changes", key=f"edit_submit_{selected_tx_id}"):
-                                try:
-                                    update_transaction(
-                                        selected_tx_id,
-                                        {
-                                            "date": e_date,
-                                            "description": e_desc,
-                                            "amount": e_amt,
-                                            "category": e_cat,
-                                            "type": e_type,
-                                        },
-                                        workspace=session_ws,
-                                        source="human",
-                                    )
-                                    st.success(f"Updated transaction {selected_tx_id}.")
-                                except Exception as e:
-                                    st.error(f"Update failed: {e}")
-
-                    with delete_tab:
-                        st.write(f"Delete: **{sel_row.get('description', '')}** (${sel_row.get('amount', 0):,.2f} on {sel_row.get('date', '')})")
                         confirm_del = st.checkbox("Confirm deletion of this transaction", key=f"confirm_del_{selected_tx_id}")
-                        if st.button("Delete Transaction", key=f"delete_btn_{selected_tx_id}"):
+
+                        col_btn1, col_btn2 = st.columns([1, 1])
+                        with col_btn1:
+                            save_clicked = st.form_submit_button("Save", key=f"edit_save_btn_{selected_tx_id}")
+                        with col_btn2:
+                            delete_clicked = st.form_submit_button("Delete", key=f"edit_del_btn_{selected_tx_id}")
+
+                        if save_clicked:
+                            try:
+                                update_transaction(
+                                    selected_tx_id,
+                                    {
+                                        "date": e_date,
+                                        "description": e_desc,
+                                        "amount": e_amt,
+                                        "category": e_cat,
+                                        "type": e_type,
+                                    },
+                                    workspace=session_ws,
+                                    source="human",
+                                )
+                                st.success(f"Saved changes to transaction {selected_tx_id}.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Update failed: {e}")
+
+                        if delete_clicked:
                             if confirm_del:
                                 try:
                                     delete_transaction(selected_tx_id, workspace=session_ws, source="human")
                                     st.success(f"Deleted transaction {selected_tx_id}.")
+                                    st.rerun()
                                 except Exception as e:
                                     st.error(f"Delete failed: {e}")
                             else:
@@ -1068,6 +1243,9 @@ with right_col:
     with tab_inbox:
         st.subheader("Inbox")
 
+        next_undo_str = get_next_undo_line(workspace=session_ws)
+        st.write(next_undo_str)
+
         # Undo last change button
         if st.button("Undo last change", key="undo_last_change_btn"):
             res = undo(workspace=session_ws)
@@ -1141,22 +1319,13 @@ with right_col:
                         else:
                             st.markdown("Risk: **:green[LOW]**")
 
-                    st.caption(f"Expires at: {expires_at}")
-
-                    def _format_prev(v):
-                        if v is None:
-                            return "*(none)*"
-                        if isinstance(v, (int, float)):
-                            return f"${float(v):,.2f}"
-                        if isinstance(v, (dict, list)):
-                            return json.dumps(v)
-                        return str(v)
+                    st.caption(format_expiry(expires_at, now_dt))
 
                     col_pv1, col_pv2 = st.columns(2)
                     with col_pv1:
-                        st.write(f"**Before:** {_format_prev(before_val)}")
+                        st.write(f"**Before:** {format_card_value(before_val)}")
                     with col_pv2:
-                        st.write(f"**After:** {_format_prev(after_val)}")
+                        st.write(f"**After:** {format_card_value(after_val)}")
 
                     payload = prop.get("payload", {})
                     if isinstance(payload, dict) and payload.get("category"):

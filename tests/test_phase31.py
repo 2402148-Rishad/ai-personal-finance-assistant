@@ -176,6 +176,6 @@ def test_do_this_next_banner_rules(workspace_env):
     res = propose_budget_change("Dining", 320.0)
     p_id = json.loads(res)["proposal_id"]
     banner_a = get_do_this_next_banner(workspace=ws)
-    assert banner_a == "1 changes are waiting for approval. Open Inbox."
+    assert banner_a == "1 change is waiting for approval."
 
     set_active_workspace(None)

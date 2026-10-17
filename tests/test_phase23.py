@@ -162,7 +162,7 @@ def test_prompt_contains_clarification_and_revision_rules():
     # Rule checks
     assert "needs_clarification" in prompt
     assert "one short question and list the options" in prompt
-    assert "/approve" in prompt
+    assert "Approve it in the Inbox tab" in prompt or "/approve" in prompt
     assert "proposal ID" in prompt
     assert "expiry" in prompt or "expires" in prompt or "expiry time" in prompt
     assert "revises the pending proposal" in prompt

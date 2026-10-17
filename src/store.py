@@ -680,15 +680,20 @@ def add_transaction(
     if not ok_amt:
         raise ValueError(clean_amt)
 
-    desc_val = row_data.get("description", "")
-    ok_desc, clean_desc = validate_text(desc_val)
-    if not ok_desc:
-        raise ValueError(clean_desc)
-
     cat_val = row_data.get("category", "")
     ok_cat, clean_cat = validate_category(cat_val, workspace=target_dir)
     if not ok_cat:
         raise ValueError(clean_cat)
+
+    desc_val = row_data.get("description")
+    if not desc_val or not str(desc_val).strip():
+        desc_val = f"{clean_cat} expense"
+    elif clean_cat and str(desc_val).strip().lower() == clean_cat.lower():
+        desc_val = f"{clean_cat} expense"
+
+    ok_desc, clean_desc = validate_text(desc_val)
+    if not ok_desc:
+        raise ValueError(clean_desc)
 
     type_val = str(row_data.get("type", "expense")).strip().lower()
     if type_val not in ("expense", "income"):
