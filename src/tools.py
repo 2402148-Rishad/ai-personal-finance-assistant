@@ -11,12 +11,56 @@ import pandas as pd
 
 from src.logger import log_event
 
-# Resolve paths relative to project root (finance_agent/)
 try:
-    from src.config import TRANSACTIONS_PATH, BILLS_PATH, BUDGETS_PATH, ACCOUNT_PATH, PROJECT_ROOT, AS_OF_DATE
+    from src.periods import resolve_period
 except ImportError:
     try:
-        from config import TRANSACTIONS_PATH, BILLS_PATH, BUDGETS_PATH, ACCOUNT_PATH, PROJECT_ROOT, AS_OF_DATE
+        from periods import resolve_period
+    except ImportError:
+        def resolve_period(text):
+            return text
+
+
+class JsonDict(str):
+    """String subclass containing JSON that also allows dict-like access for Python callers."""
+
+    def __new__(cls, data: dict):
+        s = json.dumps(data)
+        obj = super().__new__(cls, s)
+        obj._data = data
+        return obj
+
+    def __getitem__(self, key):
+        return self._data[key]
+
+    def get(self, key, default=None):
+        return self._data.get(key, default)
+
+    def __contains__(self, key):
+        return key in self._data
+
+    def keys(self):
+        return self._data.keys()
+
+    def values(self):
+        return self._data.values()
+
+    def items(self):
+        return self._data.items()
+
+
+# Resolve paths relative to project root (finance_agent/)
+try:
+    from src.config import (
+        TRANSACTIONS_PATH, BILLS_PATH, BUDGETS_PATH, ACCOUNT_PATH, PROJECT_ROOT, AS_OF_DATE,
+        TOOL_ROW_LIMIT, TOOL_CHAR_LIMIT
+    )
+except ImportError:
+    try:
+        from config import (
+            TRANSACTIONS_PATH, BILLS_PATH, BUDGETS_PATH, ACCOUNT_PATH, PROJECT_ROOT, AS_OF_DATE,
+            TOOL_ROW_LIMIT, TOOL_CHAR_LIMIT
+        )
     except ImportError:
         PROJECT_ROOT = Path(__file__).resolve().parent.parent
         DATA_DIR = PROJECT_ROOT / "data"
@@ -25,9 +69,63 @@ except ImportError:
         BUDGETS_PATH = DATA_DIR / "budgets.json"
         ACCOUNT_PATH = DATA_DIR / "account.json"
         AS_OF_DATE = "2026-08-31"
+        TOOL_ROW_LIMIT = 50
+        TOOL_CHAR_LIMIT = 6000
 
 LOGS_DIR = PROJECT_ROOT / "logs"
 PROPOSALS_PATH = LOGS_DIR / "pending_proposals.json"
+
+
+def truncate_tool_result(data: dict) -> dict:
+    """Enforce TOOL_ROW_LIMIT and TOOL_CHAR_LIMIT on tool output dictionary.
+
+    When a tool result exceeds either limit, truncate it and add:
+      "truncated": True
+      "total_rows": N
+    where N is the original total number of rows.
+    """
+    if not isinstance(data, dict):
+        return data
+
+    row_keys = [
+        "transactions", "upcoming_bills", "duplicate_groups",
+        "recommendations", "spikes", "scheduled_bills", "items", "rows"
+    ]
+    target_key = next((k for k in row_keys if k in data and isinstance(data[k], list)), None)
+    if not target_key:
+        target_key = next((k for k, v in data.items() if isinstance(v, list) and v and isinstance(v[0], dict)), None)
+
+    needs_truncation = False
+    total_rows = 0
+
+    if target_key:
+        orig_list = data[target_key]
+        total_rows = len(orig_list)
+        if total_rows > TOOL_ROW_LIMIT:
+            needs_truncation = True
+            data[target_key] = list(orig_list[:TOOL_ROW_LIMIT])
+
+    # Check character limit
+    dumped = json.dumps(data)
+    if len(dumped) > TOOL_CHAR_LIMIT:
+        needs_truncation = True
+        if target_key:
+            if total_rows == 0:
+                total_rows = len(data[target_key])
+            data["truncated"] = True
+            data["total_rows"] = total_rows
+            while len(data[target_key]) > 0 and len(json.dumps(data)) > TOOL_CHAR_LIMIT:
+                data[target_key].pop()
+        else:
+            data["truncated"] = True
+            data["total_rows"] = total_rows
+
+    if needs_truncation:
+        data["truncated"] = True
+        data["total_rows"] = total_rows
+
+    return data
+
 
 
 def sanitize_description(desc) -> str:
@@ -47,52 +145,49 @@ def sanitize_description(desc) -> str:
 
 
 def _get_transactions_path() -> Path:
+    env_dir = os.getenv("FINANCE_DATA_DIR")
+    if env_dir and env_dir.strip():
+        return Path(env_dir.strip()).resolve() / "transactions.csv"
     cur = globals().get("TRANSACTIONS_PATH")
     default_p = PROJECT_ROOT / "data" / "transactions.csv"
-    env_dir = os.getenv("FINANCE_DATA_DIR")
-    if env_dir:
-        if cur is not None and cur != default_p and cur != Path(env_dir) / "transactions.csv":
-            return cur
-        return Path(env_dir) / "transactions.csv"
     return cur if cur is not None else default_p
 
 
 def _get_bills_path() -> Path:
+    env_dir = os.getenv("FINANCE_DATA_DIR")
+    if env_dir and env_dir.strip():
+        return Path(env_dir.strip()).resolve() / "bills.csv"
     cur = globals().get("BILLS_PATH")
     default_p = PROJECT_ROOT / "data" / "bills.csv"
-    env_dir = os.getenv("FINANCE_DATA_DIR")
-    if env_dir:
-        if cur is not None and cur != default_p and cur != Path(env_dir) / "bills.csv":
-            return cur
-        return Path(env_dir) / "bills.csv"
     return cur if cur is not None else default_p
 
 
 def _get_budgets_path() -> Path:
+    env_dir = os.getenv("FINANCE_DATA_DIR")
+    if env_dir and env_dir.strip():
+        return Path(env_dir.strip()).resolve() / "budgets.json"
     cur = globals().get("BUDGETS_PATH")
     default_p = PROJECT_ROOT / "data" / "budgets.json"
-    env_dir = os.getenv("FINANCE_DATA_DIR")
-    if env_dir:
-        if cur is not None and cur != default_p and cur != Path(env_dir) / "budgets.json":
-            return cur
-        return Path(env_dir) / "budgets.json"
     return cur if cur is not None else default_p
 
 
 def _get_account_path() -> Path:
+    env_dir = os.getenv("FINANCE_DATA_DIR")
+    if env_dir and env_dir.strip():
+        return Path(env_dir.strip()).resolve() / "account.json"
     cur = globals().get("ACCOUNT_PATH")
     default_p = PROJECT_ROOT / "data" / "account.json"
-    env_dir = os.getenv("FINANCE_DATA_DIR")
-    if env_dir:
-        if cur is not None and cur != default_p and cur != Path(env_dir) / "account.json":
-            return cur
-        return Path(env_dir) / "account.json"
     return cur if cur is not None else default_p
 
 
 def _load_transactions() -> pd.DataFrame:
     path = _get_transactions_path()
-    df = pd.read_csv(path)
+    try:
+        from src.store import ensure_transaction_ids
+        df = pd.read_csv(path)
+        df = ensure_transaction_ids(df)
+    except Exception:
+        df = pd.read_csv(path)
     if "description" in df.columns:
         df["description"] = df["description"].apply(sanitize_description)
     return df
@@ -108,6 +203,63 @@ def _load_bills() -> pd.DataFrame:
     return df
 
 
+def get_data_overview() -> str:
+    """Returns high-level metadata about the available financial dataset."""
+    try:
+        tx_df = _load_transactions()
+        if not tx_df.empty and "month" in tx_df.columns:
+            months = sorted([str(m) for m in tx_df["month"].dropna().unique() if re.match(r"^\d{4}-\d{2}$", str(m))])
+            first_month = months[0] if months else None
+            last_month = months[-1] if months else None
+            tx_count = len(tx_df)
+            if "type" in tx_df.columns and "category" in tx_df.columns:
+                exp_cats = sorted([str(c) for c in tx_df[tx_df["type"] == "expense"]["category"].dropna().unique()])
+            else:
+                exp_cats = []
+        else:
+            months = []
+            first_month = None
+            last_month = None
+            tx_count = 0
+            exp_cats = []
+
+        bills_df = _load_bills()
+        bill_count = len(bills_df) if not bills_df.empty else 0
+
+        b_path = _get_budgets_path()
+        if b_path.exists():
+            try:
+                with open(b_path, "r", encoding="utf-8") as f:
+                    budgets = json.load(f)
+                budget_cats = sorted(list(budgets.keys())) if isinstance(budgets, dict) else []
+            except Exception:
+                budget_cats = []
+        else:
+            budget_cats = []
+
+        try:
+            from src.store import get_sandbox_today
+            sandbox_today = get_sandbox_today()
+        except Exception:
+            env_as_of = os.getenv("FINANCE_AS_OF_DATE")
+            sandbox_today = env_as_of if env_as_of else globals().get("AS_OF_DATE", "2026-08-31")
+
+
+        data = {
+            "first_month": first_month,
+            "last_month": last_month,
+            "months": months,
+            "expense_categories": exp_cats,
+            "transaction_count": tx_count,
+            "bill_count": bill_count,
+            "budget_categories": budget_cats,
+            "sandbox_today": sandbox_today,
+        }
+        return JsonDict(data)
+    except Exception as e:
+        return JsonDict({"error": str(e)})
+
+
 # ============================================================================
 # Tool Implementations
 # ============================================================================
@@ -115,6 +267,11 @@ def _load_bills() -> pd.DataFrame:
 def get_monthly_summary(month: str) -> str:
     """Calculate total income, expenses, net savings, and savings rate for a month."""
     try:
+        resolved = resolve_period(month)
+        if isinstance(resolved, dict):
+            return json.dumps(resolved)
+        month = resolved[:7] if (len(resolved) == 10 and resolved[4] == "-" and resolved[7] == "-") else resolved
+
         t_path = _get_transactions_path()
         if not t_path.exists():
             return json.dumps({"error": f"Transactions file not found at {t_path}"})
@@ -143,6 +300,11 @@ def get_monthly_summary(month: str) -> str:
 def spending_by_category(month: str) -> str:
     """Calculate total spending per category for a month, sorted largest first."""
     try:
+        resolved = resolve_period(month)
+        if isinstance(resolved, dict):
+            return json.dumps(resolved)
+        month = resolved[:7] if (len(resolved) == 10 and resolved[4] == "-" and resolved[7] == "-") else resolved
+
         t_path = _get_transactions_path()
         if not t_path.exists():
             return json.dumps({"error": f"Transactions file not found at {t_path}"})
@@ -174,6 +336,11 @@ def spending_by_category(month: str) -> str:
 def get_transactions(month: str, category: str | None = None) -> str:
     """List transactions for a month, optionally filtered by category."""
     try:
+        resolved = resolve_period(month)
+        if isinstance(resolved, dict):
+            return json.dumps(resolved)
+        month = resolved[:7] if (len(resolved) == 10 and resolved[4] == "-" and resolved[7] == "-") else resolved
+
         t_path = _get_transactions_path()
         if not t_path.exists():
             return json.dumps({"error": f"Transactions file not found at {t_path}"})
@@ -191,12 +358,14 @@ def get_transactions(month: str, category: str | None = None) -> str:
             filtered = m_df
 
         records = filtered.to_dict(orient="records")
-        return json.dumps({
+        res = {
             "month": month,
             "category": category,
             "count": len(records),
             "transactions": records,
-        })
+        }
+        return json.dumps(truncate_tool_result(res))
+
     except Exception as e:
         return json.dumps({"error": str(e)})
 
@@ -204,6 +373,11 @@ def get_transactions(month: str, category: str | None = None) -> str:
 def upcoming_bills(today: str | None = None, days_ahead: int = 30) -> str:
     """Find recurring bills due within N days from a given date."""
     try:
+        if today is not None and str(today).strip():
+            resolved_today = resolve_period(today)
+            if isinstance(resolved_today, str):
+                today = resolved_today
+
         if today is None or not str(today).strip():
             today = AS_OF_DATE
 
@@ -226,26 +400,34 @@ def upcoming_bills(today: str | None = None, days_ahead: int = 30) -> str:
         upcoming = []
         for offset in range(days_ahead + 1):
             target_dt = today_dt + timedelta(days=offset)
-            matching = bills_df[bills_df["due_day"] == target_dt.day]
-            for _, row in matching.iterrows():
-                upcoming.append({
-                    "bill_name": str(row["bill_name"]),
-                    "category": str(row["category"]),
-                    "amount": round(float(row["amount"]), 2),
-                    "due_date": target_dt.isoformat(),
-                    "days_until_due": offset,
-                })
+            max_day = calendar.monthrange(target_dt.year, target_dt.month)[1]
+            for _, row in bills_df.iterrows():
+                try:
+                    raw_day = int(row["due_day"])
+                except (ValueError, TypeError):
+                    continue
+                clamped_day = min(raw_day, max_day)
+                if clamped_day == target_dt.day:
+                    upcoming.append({
+                        "bill_name": str(row["bill_name"]),
+                        "category": str(row["category"]),
+                        "amount": round(float(row["amount"]), 2),
+                        "due_date": target_dt.isoformat(),
+                        "days_until_due": offset,
+                    })
 
         total_due = round(sum(b["amount"] for b in upcoming), 2)
 
-        return json.dumps({
+        res = {
             "today": today,
             "days_ahead": days_ahead,
             "bill_count": len(upcoming),
             "count": len(upcoming),
             "total_due": total_due,
             "upcoming_bills": upcoming,
-        })
+        }
+        return json.dumps(truncate_tool_result(res))
+
     except Exception as e:
         return json.dumps({"error": str(e)})
 
@@ -253,6 +435,11 @@ def upcoming_bills(today: str | None = None, days_ahead: int = 30) -> str:
 def budget_status(month: str) -> str:
     """Compare monthly actual spending against budget limits for all categories."""
     try:
+        resolved = resolve_period(month)
+        if isinstance(resolved, dict):
+            return json.dumps(resolved)
+        month = resolved[:7] if (len(resolved) == 10 and resolved[4] == "-" and resolved[7] == "-") else resolved
+
         b_path = _get_budgets_path()
         if not b_path.exists():
             return json.dumps({"error": f"Budgets file not found at {b_path}"})
@@ -301,6 +488,11 @@ def budget_status(month: str) -> str:
 def find_possible_duplicates(month: str) -> str:
     """Identify duplicate transactions with identical date, description, and amount."""
     try:
+        resolved = resolve_period(month)
+        if isinstance(resolved, dict):
+            return json.dumps(resolved)
+        month = resolved[:7] if (len(resolved) == 10 and resolved[4] == "-" and resolved[7] == "-") else resolved
+
         t_path = _get_transactions_path()
         if not t_path.exists():
             return json.dumps({"error": f"Transactions file not found at {t_path}"})
@@ -331,11 +523,13 @@ def find_possible_duplicates(month: str) -> str:
                 "transactions": group.to_dict(orient="records"),
             })
 
-        return json.dumps({
+        res = {
             "month": month,
             "count": len(groups),
             "duplicate_groups": groups,
-        })
+        }
+        return json.dumps(truncate_tool_result(res))
+
     except Exception as e:
         return json.dumps({"error": str(e)})
 
@@ -446,6 +640,11 @@ def propose_budget_change(category: str, new_limit: float) -> str:
 def cashflow_projection(days_ahead: int = 30, today: str | None = None) -> str:
     """Project day-by-day cashflow, scheduled bills, expected income, and simulated balance over a forward horizon."""
     try:
+        if today is not None and str(today).strip():
+            resolved_today = resolve_period(today)
+            if isinstance(resolved_today, str):
+                today = resolved_today
+
         if today is None or not str(today).strip():
             today = AS_OF_DATE
 
@@ -490,14 +689,21 @@ def cashflow_projection(days_ahead: int = 30, today: str | None = None) -> str:
         scheduled_bills = []
         for offset in range(days_ahead + 1):
             target_dt = today_dt + timedelta(days=offset)
-            matching = bills_df[bills_df["due_day"] == target_dt.day]
-            for _, row in matching.iterrows():
-                scheduled_bills.append({
-                    "name": str(row["bill_name"]),
-                    "due_date": target_dt.isoformat(),
-                    "amount": round(float(row["amount"]), 2),
-                })
+            max_day = calendar.monthrange(target_dt.year, target_dt.month)[1]
+            for _, row in bills_df.iterrows():
+                try:
+                    raw_day = int(row["due_day"])
+                except (ValueError, TypeError):
+                    continue
+                clamped_day = min(raw_day, max_day)
+                if clamped_day == target_dt.day:
+                    scheduled_bills.append({
+                        "name": str(row["bill_name"]),
+                        "due_date": target_dt.isoformat(),
+                        "amount": round(float(row["amount"]), 2),
+                    })
         total_bills = round(sum(b["amount"] for b in scheduled_bills), 2)
+
 
         # 2.1.3 Expected income: infer usual pay day from most recent income transaction day of month,
         # use average monthly income, include only if that date falls inside window
@@ -577,7 +783,7 @@ def cashflow_projection(days_ahead: int = 30, today: str | None = None) -> str:
             "Daily spending uses all discretionary expenses in the period, including one-off costs such as the August medical charge. This makes the projection more conservative.",
         ]
 
-        return json.dumps({
+        res = {
             "as_of": today,
             "simulated_sandbox_balance": simulated_sandbox_balance,
             "horizon_days": days_ahead,
@@ -590,7 +796,9 @@ def cashflow_projection(days_ahead: int = 30, today: str | None = None) -> str:
             "lowest_balance_date": lowest_balance_date,
             "covers_all_bills": covers_all_bills,
             "assumptions": assumptions,
-        })
+        }
+        return json.dumps(truncate_tool_result(res))
+
     except Exception as e:
         return json.dumps({"error": str(e)})
 
@@ -598,6 +806,11 @@ def cashflow_projection(days_ahead: int = 30, today: str | None = None) -> str:
 def detect_spending_spikes(month: str) -> str:
     """Compare each expense category with the previous month and flag spikes (>50% increase AND >=$50 absolute increase)."""
     try:
+        resolved = resolve_period(month)
+        if isinstance(resolved, dict):
+            return json.dumps(resolved)
+        month = resolved[:7] if (len(resolved) == 10 and resolved[4] == "-" and resolved[7] == "-") else resolved
+
         t_path = _get_transactions_path()
         if not t_path.exists():
             return json.dumps({"error": f"Transactions file not found at {t_path}"})
@@ -656,6 +869,11 @@ def detect_spending_spikes(month: str) -> str:
 def savings_recommendations(month: str) -> str:
     """Generate rule-based financial advice and savings recommendations for a given month."""
     try:
+        resolved = resolve_period(month)
+        if isinstance(resolved, dict):
+            return json.dumps(resolved)
+        month = resolved[:7] if (len(resolved) == 10 and resolved[4] == "-" and resolved[7] == "-") else resolved
+
         t_path = _get_transactions_path()
         if not t_path.exists():
             return json.dumps({"error": f"Transactions file not found at {t_path}"})
@@ -827,13 +1045,15 @@ def savings_recommendations(month: str) -> str:
         # 2.3.6 Return a disclaimer field containing: "General suggestion, not professional financial advice."
         disclaimer = "General suggestion, not professional financial advice."
 
-        return json.dumps({
+        res = {
             "month": month,
             "item_count": len(items),
             "recommendations": items,
             "total_potential_saving": total_potential_saving,
             "disclaimer": disclaimer,
-        })
+        }
+        return json.dumps(truncate_tool_result(res))
+
     except Exception as e:
         return json.dumps({"error": str(e)})
 
@@ -1007,6 +1227,15 @@ SAVINGS_RECOMMENDATIONS_SCHEMA = {
     },
 }
 
+GET_DATA_OVERVIEW_SCHEMA = {
+    "name": "get_data_overview",
+    "description": "Returns high-level metadata about the available financial dataset, including the range of available months (first_month, last_month, months), expense categories, transaction count, bill count, budget categories, and the simulated sandbox today date.",
+    "parameters": {
+        "type": "object",
+        "properties": {},
+    },
+}
+
 # Only schemas sent to the model
 TOOL_SCHEMAS = [
     GET_MONTHLY_SUMMARY_SCHEMA,
@@ -1033,3 +1262,4 @@ TOOLS_BY_NAME = {
     "detect_spending_spikes": detect_spending_spikes,
     "savings_recommendations": savings_recommendations,
 }
+

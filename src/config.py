@@ -36,3 +36,8 @@ CURRENCY = "USD"
 
 # Simulated sandbox date, because the demo data ends in August 2026
 AS_OF_DATE = os.getenv("FINANCE_AS_OF_DATE", "2026-08-31")
+
+# Output limits for tool execution
+TOOL_ROW_LIMIT = int(os.getenv("TOOL_ROW_LIMIT", "50"))
+TOOL_CHAR_LIMIT = int(os.getenv("TOOL_CHAR_LIMIT", "6000"))
+

@@ -23,6 +23,7 @@ TOOL_TIERS = {
     "cashflow_projection": Tier.READ,
     "detect_spending_spikes": Tier.READ,
     "savings_recommendations": Tier.READ,
+    "get_data_overview": Tier.READ,
 
     # Proposal tools
     "propose_budget_change": Tier.PROPOSE,

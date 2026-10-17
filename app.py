@@ -4,7 +4,7 @@ import streamlit as st
 
 from src.agent import run_agent
 from src.config import AS_OF_DATE
-from src.tools import cashflow_projection, spending_by_category, upcoming_bills
+from src.tools import cashflow_projection, get_data_overview, spending_by_category, upcoming_bills
 
 st.set_page_config(
     page_title="Fin",
@@ -131,11 +131,16 @@ with right_col:
     # Column header using helper function
     render_column_header("Your month.")
 
-    # Month selector defaulting to 2026-08
+    # Month selector dynamically built from get_data_overview()
+    overview = get_data_overview()
+    available_months = overview.get("months") or ["2026-06", "2026-07", "2026-08"]
+    last_m = overview.get("last_month")
+    default_idx = available_months.index(last_m) if last_m in available_months else len(available_months) - 1
+
     selected_month = st.selectbox(
         "Select Month",
-        options=["2026-06", "2026-07", "2026-08"],
-        index=2,
+        options=available_months,
+        index=default_idx,
         label_visibility="collapsed",
     )
 

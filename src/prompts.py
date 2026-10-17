@@ -10,9 +10,22 @@ except ImportError:
 
 
 def build_system_prompt() -> str:
-    """Build the system prompt with the simulated sandbox date inserted."""
+    """Build the system prompt with data-driven date range and simulated sandbox date."""
+    try:
+        from src.tools import get_data_overview
+        overview = get_data_overview()
+        first_m = overview.get("first_month") or "2026-06"
+        last_m = overview.get("last_month") or "2026-08"
+        sandbox_today = overview.get("sandbox_today") or AS_OF_DATE
+        sandbox_month = sandbox_today[:7]
+    except Exception:
+        first_m = "2026-06"
+        last_m = "2026-08"
+        sandbox_today = AS_OF_DATE
+        sandbox_month = AS_OF_DATE[:7]
+
     return f"""You are "Fin", a personal finance assistant for one user.
-Today's date is {AS_OF_DATE} (simulated sandbox date). The data covers 2026-06 to 2026-08. 'This month' means 2026-08.
+Today's date is {sandbox_today} (simulated sandbox date). The data covers {first_m} to {last_m}. 'This month' means {sandbox_month}.
 
 Rules:
 1. Every number you state must come from a tool result. Never estimate or invent amounts.
