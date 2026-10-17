@@ -167,6 +167,9 @@ def sanitize_description(desc) -> str:
 
 
 def _get_transactions_path() -> Path:
+    ws = store.get_active_workspace()
+    if ws is not None:
+        return ws / "transactions.csv"
     env_dir = os.getenv("FINANCE_DATA_DIR")
     if env_dir and env_dir.strip():
         return Path(env_dir.strip()).resolve() / "transactions.csv"
@@ -176,6 +179,9 @@ def _get_transactions_path() -> Path:
 
 
 def _get_bills_path() -> Path:
+    ws = store.get_active_workspace()
+    if ws is not None:
+        return ws / "bills.csv"
     env_dir = os.getenv("FINANCE_DATA_DIR")
     if env_dir and env_dir.strip():
         return Path(env_dir.strip()).resolve() / "bills.csv"
@@ -185,6 +191,9 @@ def _get_bills_path() -> Path:
 
 
 def _get_budgets_path() -> Path:
+    ws = store.get_active_workspace()
+    if ws is not None:
+        return ws / "budgets.json"
     env_dir = os.getenv("FINANCE_DATA_DIR")
     if env_dir and env_dir.strip():
         return Path(env_dir.strip()).resolve() / "budgets.json"
@@ -194,6 +203,9 @@ def _get_budgets_path() -> Path:
 
 
 def _get_account_path() -> Path:
+    ws = store.get_active_workspace()
+    if ws is not None:
+        return ws / "account.json"
     env_dir = os.getenv("FINANCE_DATA_DIR")
     if env_dir and env_dir.strip():
         return Path(env_dir.strip()).resolve() / "account.json"
@@ -485,7 +497,7 @@ def budget_status(month: str) -> str:
         for cat, limit in budgets.items():
             spent = round(float(spent_by_cat.get(cat, 0.0)), 2)
             limit_val = round(float(limit), 2)
-            pct = round((spent / limit_val * 100), 1) if limit_val > 0 else 0.0
+            pct = round((spent / limit_val * 100), 1) if limit_val > 0 else None
             is_over = spent > limit_val
             categories_status[cat] = {
                 "limit": limit_val,

@@ -33,3 +33,20 @@ def mock_genai_client(monkeypatch, request):
     mock_client.models.generate_content.return_value = mock_resp
 
     monkeypatch.setattr("src.agent.genai.Client", lambda api_key=None: mock_client)
+
+
+@pytest.fixture(autouse=True)
+def reset_active_workspace():
+    """Ensure active workspace contextvar is cleanly reset around each test."""
+    try:
+        from src.store import set_active_workspace
+        set_active_workspace(None)
+    except Exception:
+        pass
+    yield
+    try:
+        from src.store import set_active_workspace
+        set_active_workspace(None)
+    except Exception:
+        pass
+

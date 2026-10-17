@@ -17,6 +17,8 @@ Verifies:
    one approve_all call with 'yes', and assert monthly total rose by exactly 19.
 """
 
+import calendar
+from datetime import date, timedelta
 import json
 from pathlib import Path
 import pytest
@@ -44,6 +46,7 @@ from src.store import (
     read_csv,
     read_audit,
     read_proposals,
+    get_sandbox_today,
 )
 
 
@@ -111,6 +114,58 @@ def test_golden_scenario_g1(workspace_env):
     assert "lowest_balance_date" in data_cf, "Expected lowest_balance_date in cashflow projection"
     assert data_cf["lowest_balance"] is not None
     assert data_cf["lowest_balance_date"] is not None
+
+    # Compute expected lowest balance with pandas directly from the same workspace
+    today_str = get_sandbox_today(workspace=ws)
+    today_dt = date.fromisoformat(today_str)
+    acc_data = read_json("account.json", workspace=ws)
+    opening_bal = float(acc_data.get("opening_balance", 0.0))
+    df_tx_ws = read_csv("transactions.csv", workspace=ws)
+    past_tx = df_tx_ws[df_tx_ws["date"] <= today_str]
+    past_inc = float(past_tx[past_tx["type"] == "income"]["amount"].sum())
+    past_exp = float(past_tx[past_tx["type"] == "expense"]["amount"].sum())
+    sim_starting_bal = round(opening_bal + past_inc - past_exp, 2)
+
+    df_bills_ws = read_csv("bills.csv", workspace=ws)
+    bills_by_date = {}
+    for offset in range(31):
+        target_dt = today_dt + timedelta(days=offset)
+        max_d = calendar.monthrange(target_dt.year, target_dt.month)[1]
+        for _, r in df_bills_ws.iterrows():
+            if min(int(r["due_day"]), max_d) == target_dt.day:
+                d_str = target_dt.isoformat()
+                bills_by_date[d_str] = bills_by_date.get(d_str, 0.0) + float(r["amount"])
+
+    inc_tx = df_tx_ws[df_tx_ws["type"] == "income"].sort_values("date")
+    pay_day = int(str(inc_tx.iloc[-1]["date"]).split("-")[2])
+    avg_inc = round(float(inc_tx.groupby("month")["amount"].sum().mean()), 2)
+
+    bill_cats = set(df_bills_ws["category"].dropna().unique())
+    disc_exp = float(df_tx_ws[(df_tx_ws["type"] == "expense") & (~df_tx_ws["category"].isin(bill_cats))]["amount"].sum())
+    months = sorted(df_tx_ws["month"].dropna().unique())
+    first_y, first_mo = map(int, months[0].split("-"))
+    last_y, last_mo = map(int, months[-1].split("-"))
+    total_days = (date(last_y, last_mo, calendar.monthrange(last_y, last_mo)[1]) - date(first_y, first_mo, 1)).days + 1
+    avg_disc = round(disc_exp / total_days, 2)
+
+    sim_bal = sim_starting_bal
+    expected_lowest_balance = sim_bal
+    if today_dt.isoformat() in bills_by_date:
+        sim_bal = round(sim_bal - bills_by_date[today_dt.isoformat()], 2)
+        expected_lowest_balance = min(expected_lowest_balance, sim_bal)
+
+    for offset in range(1, 31):
+        target_dt = today_dt + timedelta(days=offset)
+        d_str = target_dt.isoformat()
+        if target_dt.day == pay_day:
+            sim_bal = round(sim_bal + avg_inc, 2)
+        if d_str in bills_by_date:
+            sim_bal = round(sim_bal - bills_by_date[d_str], 2)
+        sim_bal = round(sim_bal - avg_disc, 2)
+        expected_lowest_balance = min(expected_lowest_balance, sim_bal)
+
+    # Assert tool lowest_balance matches expected pandas computation to the cent
+    assert round(data_cf["lowest_balance"], 2) == round(expected_lowest_balance, 2)
 
     # d. propose_budget_change to set Dining to 250, then reject it
     res_bgt = propose_budget_change("Dining", 250.0)

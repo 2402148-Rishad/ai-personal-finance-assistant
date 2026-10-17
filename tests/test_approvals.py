@@ -408,3 +408,23 @@ def test_approvals_module_never_calls_input_or_print(workspace_env, monkeypatch)
 
     mock_input.assert_not_called()
     mock_print.assert_not_called()
+
+
+def test_confirm_approval_refuses_high_risk_on_yes(workspace_env):
+    """Verify that confirm_approval(id, 'yes') refuses high-risk proposals."""
+    ws = workspace_env
+    df_tx = read_csv("transactions.csv", workspace=ws)
+    first_id = str(df_tx["id"].iloc[0])
+
+    # Delete transaction is high risk
+    res_del = tools_module.propose_delete_transaction(first_id)
+    p_id = json.loads(res_del)["proposal_id"]
+
+    # confirm_approval with 'yes' on high-risk proposal must be refused
+    res = confirm_approval(p_id, "yes", workspace=ws)
+    assert res.get("status") == "error"
+    assert "CONFIRM" in res.get("error", "")
+
+    # confirm_approval with 'CONFIRM' on high-risk proposal succeeds
+    res_confirm = confirm_approval(p_id, "CONFIRM", workspace=ws)
+    assert res_confirm.get("status") == "applied"

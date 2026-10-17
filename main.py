@@ -16,6 +16,9 @@ from src.approvals import (
 PROPOSALS_PATH = Path(__file__).resolve().parent / "logs" / "pending_proposals.json"
 
 
+from src.store import get_data_dir, set_active_workspace
+
+
 def handle_pending_command(workspace=None):
     """List pending proposals from active workspace (<workspace>/proposals.json)."""
     proposals_dict = {}
@@ -59,6 +62,7 @@ def handle_pending_command(workspace=None):
 
 def main():
     """Run an interactive CLI loop prompting the user for questions."""
+    set_active_workspace(get_data_dir())
     print("Personal Finance Assistant CLI (type 'exit' to quit)")
     print("-" * 60)
 

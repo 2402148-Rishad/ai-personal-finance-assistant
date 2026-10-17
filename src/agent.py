@@ -203,7 +203,8 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
 
                 # 2.2) tool_call: log tool name and arguments before execution
                 log_event("tool_call", {"tool_name": tool_name, "arguments": tool_args})
-                all_tool_calls.append({"name": tool_name, "arguments": tool_args})
+                tc_entry = {"name": tool_name, "arguments": tool_args}
+                all_tool_calls.append(tc_entry)
 
                 # Check permissions before running any tool
                 if not check_permission(tool_name):
@@ -229,6 +230,8 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
                         # 2.6) error: log exception with a short message
                         log_event("error", {"error": err_msg, "tool_name": tool_name})
                         tool_result = {"error": f"Error running '{tool_name}': {err_msg}"}
+
+                tc_entry["result"] = tool_result
 
                 # 2.3) tool_result: log tool name and result, truncating longer than 1000 characters
                 res_to_log = tool_result

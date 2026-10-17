@@ -36,9 +36,12 @@ import src.store as store
 
 
 def _resolve_workspace(workspace: Path | str | None = None) -> Path:
-    """Resolve target workspace directory, honoring explicit args, env vars, or monkeypatched paths."""
+    """Resolve target workspace directory, honoring explicit args, active context, env vars, or monkeypatched paths."""
     if workspace is not None:
         return Path(workspace).resolve()
+    active_ws = store.get_active_workspace()
+    if active_ws is not None:
+        return active_ws
     env_dir = os.getenv("FINANCE_DATA_DIR")
     if env_dir and env_dir.strip():
         return Path(env_dir.strip()).resolve()
@@ -742,10 +745,8 @@ def confirm_approval(proposal_id: str, decision: str, workspace: Path | str | No
     old_limit = proposal.get("old_limit") if "old_limit" in proposal else proposal.get("payload", {}).get("old_limit")
     new_limit = proposal.get("new_limit") if "new_limit" in proposal else proposal.get("payload", {}).get("new_limit")
 
-    if decision == "yes":
-        risk = proposal.get("risk", "low")
-        answer = "CONFIRM" if risk == "high" else "yes"
-        res = approve(proposal_id, answer, workspace=ws)
+    if decision in ("yes", "CONFIRM"):
+        res = approve(proposal_id, decision, workspace=ws)
         if res.get("status") == "applied":
             if "category" not in res and category:
                 res["category"] = category

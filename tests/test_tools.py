@@ -162,6 +162,27 @@ class TestFinancialTools:
         assert "over_budget" not in health_status
         assert "Health" in data_aug["over_budget_categories"]
 
+    def test_budget_status_zero_limit_returns_null_percent_used(self, tmp_path, monkeypatch):
+        """Test that budget_status returns percent_used as null (None) when limit is 0, not a division error."""
+        import shutil
+        from src.store import SEED_DATA_DIR
+
+        ws = tmp_path / "ws_zero_limit"
+        shutil.copytree(SEED_DATA_DIR, ws)
+        monkeypatch.setenv("FINANCE_DATA_DIR", str(ws))
+
+        # Set Dining limit to 0
+        bgt_path = ws / "budgets.json"
+        bgts = json.loads(bgt_path.read_text(encoding="utf-8"))
+        bgts["Dining"] = 0.0
+        bgt_path.write_text(json.dumps(bgts), encoding="utf-8")
+
+        raw_res = budget_status("2026-07")
+        data = json.loads(raw_res)
+        assert "error" not in data
+        assert data["categories"]["Dining"]["limit"] == 0.0
+        assert data["categories"]["Dining"]["percent_used"] is None
+
     def test_find_possible_duplicates(self):
         """Test finding exact duplicate transactions for audit."""
         # July 2026 has the known duplicate Blue Bottle Coffee charge on 2026-07-14

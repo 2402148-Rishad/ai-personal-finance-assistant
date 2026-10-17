@@ -2,6 +2,7 @@
 managing isolated session workspaces, and maintaining audit logs.
 """
 
+import contextvars
 from datetime import date, datetime, timedelta
 import json
 import os
@@ -35,6 +36,24 @@ SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 # requires external file locks or database coordination.
 _WRITE_LOCK = threading.RLock()
 
+# ContextVar for active workspace isolation across request contexts/sessions
+_ACTIVE_WORKSPACE: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
+    "active_workspace", default=None
+)
+
+
+def set_active_workspace(workspace: Path | str | None) -> None:
+    """Set the active workspace in the current context."""
+    if workspace is None:
+        _ACTIVE_WORKSPACE.set(None)
+    else:
+        _ACTIVE_WORKSPACE.set(Path(workspace).resolve())
+
+
+def get_active_workspace() -> Path | None:
+    """Get the active workspace from the current context, if set."""
+    return _ACTIVE_WORKSPACE.get()
+
 
 def _handle_remove_readonly(func, path, exc_info):
     """Clear readonly bit and retry file removal on Windows."""
@@ -48,8 +67,13 @@ def _handle_remove_readonly(func, path, exc_info):
 def get_data_dir() -> Path:
     """Return the active data directory.
 
-    Resolves FINANCE_DATA_DIR from environment if set, otherwise defaults to DATA_DIR.
+    Resolves active workspace from ContextVar if set,
+    otherwise FINANCE_DATA_DIR from environment if set,
+    otherwise defaults to DATA_DIR.
     """
+    active_ws = get_active_workspace()
+    if active_ws is not None:
+        return active_ws
     env_dir = os.getenv("FINANCE_DATA_DIR")
     if env_dir and env_dir.strip():
         return Path(env_dir.strip()).resolve()
@@ -302,6 +326,35 @@ def reset_workspace(session_id: str, base_dir: Path | str | None = None) -> Path
     return ws_path
 
 
+def cleanup_old_workspaces(max_age_hours: int = 24, base_dir: Path | str | None = None) -> list[str]:
+    """Delete workspace directories in workspaces/ that have not been modified for more than max_age_hours."""
+    root_ws = Path(base_dir).resolve() if base_dir is not None else get_workspaces_dir()
+    if not root_ws.exists():
+        return []
+
+    cutoff = datetime.now() - timedelta(hours=max_age_hours)
+    cutoff_ts = cutoff.timestamp()
+    deleted = []
+
+    for item in root_ws.iterdir():
+        if item.is_dir() and item.resolve() != SEED_DATA_DIR:
+            try:
+                mtimes = [item.stat().st_mtime]
+                for p in item.rglob("*"):
+                    try:
+                        mtimes.append(p.stat().st_mtime)
+                    except Exception:
+                        pass
+                latest_mtime = max(mtimes) if mtimes else item.stat().st_mtime
+                if latest_mtime < cutoff_ts:
+                    shutil.rmtree(item, onerror=_handle_remove_readonly)
+                    deleted.append(item.name)
+            except Exception:
+                pass
+    return deleted
+
+
+
 def _truncate_strings(val: Any, max_len: int = 500) -> Any:
     """Recursively truncate strings to max_len characters."""
     if isinstance(val, str):
@@ -535,5 +588,279 @@ def create_proposal(
 
     save_proposal(proposal, workspace=workspace)
     return proposal
+
+
+def search_transactions(
+    query: str | None = None,
+    category: str | None = None,
+    start_date: str | date | None = None,
+    end_date: str | date | None = None,
+    min_amount: float | None = None,
+    max_amount: float | None = None,
+    tx_type: str | None = None,
+    workspace: Path | str | None = None,
+) -> pd.DataFrame:
+    """Search and filter transactions from the active workspace."""
+    target_dir = Path(workspace).resolve() if workspace is not None else get_data_dir()
+    tx_path = target_dir / "transactions.csv"
+    if not tx_path.exists():
+        return pd.DataFrame(columns=["id", "date", "month", "category", "description", "type", "amount"])
+
+    df = read_csv("transactions.csv", workspace=target_dir)
+    if df.empty:
+        return df
+
+    mask = pd.Series([True] * len(df), index=df.index)
+
+    if query and str(query).strip():
+        q = str(query).strip().lower()
+        desc_match = df["description"].astype(str).str.lower().str.contains(q, na=False)
+        cat_match = df["category"].astype(str).str.lower().str.contains(q, na=False)
+        id_match = df["id"].astype(str).str.lower().str.contains(q, na=False) if "id" in df.columns else False
+        mask &= (desc_match | cat_match | id_match)
+
+    if category and str(category).strip() and str(category).lower() != "all":
+        cat_filter = str(category).strip().lower()
+        mask &= (df["category"].astype(str).str.lower() == cat_filter)
+
+    if tx_type and str(tx_type).strip() and str(tx_type).lower() != "all":
+        t_filter = str(tx_type).strip().lower()
+        mask &= (df["type"].astype(str).str.lower() == t_filter)
+
+    if start_date:
+        s_date = str(start_date).strip()
+        mask &= (df["date"].astype(str) >= s_date)
+
+    if end_date:
+        e_date = str(end_date).strip()
+        mask &= (df["date"].astype(str) <= e_date)
+
+    if min_amount is not None:
+        try:
+            min_val = float(min_amount)
+            if min_val > 0:
+                mask &= (df["amount"].astype(float) >= min_val)
+        except (ValueError, TypeError):
+            pass
+
+    if max_amount is not None:
+        try:
+            max_val = float(max_amount)
+            if max_val > 0:
+                mask &= (df["amount"].astype(float) <= max_val)
+        except (ValueError, TypeError):
+            pass
+
+    filtered = df[mask].copy()
+    if "date" in filtered.columns:
+        filtered = filtered.sort_values(by="date", ascending=False)
+    return filtered
+
+
+def add_transaction(
+    row_data: dict[str, Any],
+    workspace: Path | str | None = None,
+    source: str = "human",
+) -> dict[str, Any]:
+    """Validate and atomically add a transaction to transactions.csv with an audit log line."""
+    try:
+        from src.validators import validate_amount, validate_category, validate_date, validate_text
+    except ImportError:
+        from validators import validate_amount, validate_category, validate_date, validate_text
+
+    target_dir = Path(workspace).resolve() if workspace is not None else get_data_dir()
+
+    date_val = row_data.get("date")
+    ok_date, clean_date = validate_date(date_val, workspace=target_dir)
+    if not ok_date:
+        raise ValueError(clean_date)
+
+    amount_val = row_data.get("amount")
+    ok_amt, clean_amt = validate_amount(amount_val)
+    if not ok_amt:
+        raise ValueError(clean_amt)
+
+    desc_val = row_data.get("description", "")
+    ok_desc, clean_desc = validate_text(desc_val)
+    if not ok_desc:
+        raise ValueError(clean_desc)
+
+    cat_val = row_data.get("category", "")
+    ok_cat, clean_cat = validate_category(cat_val, workspace=target_dir)
+    if not ok_cat:
+        raise ValueError(clean_cat)
+
+    type_val = str(row_data.get("type", "expense")).strip().lower()
+    if type_val not in ("expense", "income"):
+        raise ValueError("Type must be either 'expense' or 'income'.")
+
+    df = read_csv("transactions.csv", workspace=target_dir)
+
+    new_id = f"t{uuid.uuid4().hex[:10]}"
+    month_val = clean_date[:7]
+
+    new_record = {
+        "id": new_id,
+        "date": clean_date,
+        "month": month_val,
+        "category": clean_cat,
+        "description": clean_desc,
+        "type": type_val,
+        "amount": clean_amt,
+    }
+
+    new_row_df = pd.DataFrame([new_record])
+    updated_df = pd.concat([df, new_row_df], ignore_index=True)
+    write_csv_atomic("transactions.csv", updated_df, workspace=target_dir)
+
+    append_audit(
+        action="add_transaction",
+        before=None,
+        after=new_record,
+        source=source,
+        workspace=target_dir,
+    )
+    return new_record
+
+
+def update_transaction(
+    tx_id: str,
+    updated_fields: dict[str, Any],
+    workspace: Path | str | None = None,
+    source: str = "human",
+) -> dict[str, Any]:
+    """Validate and atomically update an existing transaction in transactions.csv with an audit log line."""
+    try:
+        from src.validators import validate_amount, validate_category, validate_date, validate_text
+    except ImportError:
+        from validators import validate_amount, validate_category, validate_date, validate_text
+
+    target_dir = Path(workspace).resolve() if workspace is not None else get_data_dir()
+    df = read_csv("transactions.csv", workspace=target_dir)
+
+    if "id" not in df.columns:
+        raise ValueError("Transactions file has no id column.")
+
+    matches = df.index[df["id"].astype(str) == str(tx_id)].tolist()
+    if not matches:
+        raise ValueError(f"Transaction with id '{tx_id}' not found.")
+
+    row_idx = matches[0]
+    old_row = df.loc[row_idx].to_dict()
+
+    new_row = dict(old_row)
+
+    if "date" in updated_fields:
+        ok_date, clean_date = validate_date(updated_fields["date"], workspace=target_dir)
+        if not ok_date:
+            raise ValueError(clean_date)
+        new_row["date"] = clean_date
+        new_row["month"] = clean_date[:7]
+
+    if "amount" in updated_fields:
+        ok_amt, clean_amt = validate_amount(updated_fields["amount"])
+        if not ok_amt:
+            raise ValueError(clean_amt)
+        new_row["amount"] = clean_amt
+
+    if "description" in updated_fields:
+        ok_desc, clean_desc = validate_text(updated_fields["description"])
+        if not ok_desc:
+            raise ValueError(clean_desc)
+        new_row["description"] = clean_desc
+
+    if "category" in updated_fields:
+        ok_cat, clean_cat = validate_category(updated_fields["category"], workspace=target_dir)
+        if not ok_cat:
+            raise ValueError(clean_cat)
+        new_row["category"] = clean_cat
+
+    if "type" in updated_fields:
+        t_val = str(updated_fields["type"]).strip().lower()
+        if t_val not in ("expense", "income"):
+            raise ValueError("Type must be either 'expense' or 'income'.")
+        new_row["type"] = t_val
+
+    for col, val in new_row.items():
+        df.at[row_idx, col] = val
+
+    write_csv_atomic("transactions.csv", df, workspace=target_dir)
+
+    append_audit(
+        action="update_transaction",
+        before=old_row,
+        after=new_row,
+        source=source,
+        workspace=target_dir,
+    )
+    return new_row
+
+
+def delete_transaction(
+    tx_id: str,
+    workspace: Path | str | None = None,
+    source: str = "human",
+) -> dict[str, Any]:
+    """Atomically delete a transaction by id with an audit log line."""
+    target_dir = Path(workspace).resolve() if workspace is not None else get_data_dir()
+    df = read_csv("transactions.csv", workspace=target_dir)
+
+    if "id" not in df.columns:
+        raise ValueError("Transactions file has no id column.")
+
+    matches = df.index[df["id"].astype(str) == str(tx_id)].tolist()
+    if not matches:
+        raise ValueError(f"Transaction with id '{tx_id}' not found.")
+
+    row_idx = matches[0]
+    old_row = df.loc[row_idx].to_dict()
+
+    updated_df = df.drop(index=row_idx).reset_index(drop=True)
+    write_csv_atomic("transactions.csv", updated_df, workspace=target_dir)
+
+    append_audit(
+        action="delete_transaction",
+        before=old_row,
+        after=None,
+        source=source,
+        workspace=target_dir,
+    )
+    return old_row
+
+
+def import_transactions(
+    records: list[dict[str, Any]],
+    workspace: Path | str | None = None,
+    source: str = "human",
+) -> int:
+    """Atomically append a list of validated records to transactions.csv and write one audit line."""
+    if not records:
+        return 0
+
+    target_dir = Path(workspace).resolve() if workspace is not None else get_data_dir()
+    df = read_csv("transactions.csv", workspace=target_dir)
+
+    cleaned_records = []
+    for r in records:
+        rec = dict(r)
+        if "id" not in rec or not rec["id"]:
+            rec["id"] = f"t{uuid.uuid4().hex[:10]}"
+        if "month" not in rec or not rec["month"]:
+            rec["month"] = str(rec.get("date", ""))[:7]
+        cleaned_records.append(rec)
+
+    new_rows_df = pd.DataFrame(cleaned_records)
+    updated_df = pd.concat([df, new_rows_df], ignore_index=True)
+    write_csv_atomic("transactions.csv", updated_df, workspace=target_dir)
+
+    append_audit(
+        action="import_transactions",
+        before=None,
+        after={"count": len(cleaned_records), "items": cleaned_records},
+        source=source,
+        workspace=target_dir,
+    )
+    return len(cleaned_records)
+
 
 
