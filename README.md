@@ -67,3 +67,5 @@ The evaluation can show retries when Gemini is under load. The simulated date is
 
 - Data is simulated, and the balance is a sandbox figure.
 - Answers are informational. Recommendations are general suggestions, not professional financial advice.
+- If the model hits its step limit, the chat shows the fallback message as a normal answer.
+- The chat’s error message was tested with a simulated model failure, not a live rate-limit error.

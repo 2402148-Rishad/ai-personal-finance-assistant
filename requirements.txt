@@ -10,3 +10,7 @@ python-dotenv>=1.2.0
 
 # Testing
 pytest>=9.1.0
+
+# Visualization & Web UI
+streamlit>=1.66.0
+plotly>=7.1.0
