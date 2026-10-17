@@ -14,20 +14,20 @@ BILLS_PATH = DATA_DIR / "bills.csv"
 BUDGETS_PATH = DATA_DIR / "budgets.json"
 ACCOUNT_PATH = DATA_DIR / "account.json"
 
-# Load environment variables only from finance_agent/.env
-DOTENV_PATH = PROJECT_ROOT / ".env"
-if not DOTENV_PATH.exists():
-    raise FileNotFoundError(
-        f"Missing .env file. Please create a .env file at {DOTENV_PATH} and set GEMINI_API_KEY=<your-api-key>."
-    )
-load_dotenv(DOTENV_PATH)
+# Load environment variables only from finance_agent/.env if it exists
+DOTENV_PATH = Path(os.getenv("FINANCE_DOTENV_PATH", PROJECT_ROOT / ".env"))
+if DOTENV_PATH.exists():
+    load_dotenv(DOTENV_PATH)
 
-# Read GEMINI_API_KEY from environment
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY or not GEMINI_API_KEY.strip():
-    raise ValueError(
-        f"Missing required environment variable 'GEMINI_API_KEY'. Please add GEMINI_API_KEY to your .env file at {DOTENV_PATH}."
-    )
+
+
+def get_api_key() -> str:
+    """Read GEMINI_API_KEY from environment, raising RuntimeError if not set."""
+    key = os.getenv("GEMINI_API_KEY")
+    if not key or not key.strip():
+        raise RuntimeError("GEMINI_API_KEY is not set. Add it to .env.")
+    return key
 
 # Model & execution configuration
 MODEL = "gemini-3.5-flash-lite"

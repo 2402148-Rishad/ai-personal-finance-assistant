@@ -48,12 +48,8 @@ def log_event(event_type: str, data: dict) -> None:
 
     line_str = json.dumps(record)
 
-    # Redact Gemini API key if present
-    api_key = (
-        getattr(config, "GEMINI_API_KEY", None)
-        or os.getenv("GEMINI_API_KEY")
-        or globals().get("GEMINI_API_KEY")
-    )
+    # Redact Gemini API key from environment if present
+    api_key = os.getenv("GEMINI_API_KEY") or getattr(config, "GEMINI_API_KEY", None)
     if api_key and api_key in line_str:
         line_str = line_str.replace(api_key, "[REDACTED]")
 

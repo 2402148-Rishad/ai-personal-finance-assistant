@@ -131,3 +131,21 @@ def test_retry_logging_fails_after_all_retries(temp_logs_dir, monkeypatch):
         assert fake_error_text not in str(ev["data"])
         assert "FAKE_TEST_KEY_DO_NOT_USE" not in str(ev["data"])
         assert "error" not in ev["data"]  # No error text field in provider event payload
+
+
+def test_secret_leak_not_in_answer(monkeypatch):
+    """Assert an exception containing SECRET_LEAK_TEST is never leaked in result.answer."""
+    secret_text = "SECRET_LEAK_TEST_FAILURE"
+
+    def mock_generate_content(model, contents, config):
+        raise RuntimeError(f"Internal provider failure with details: {secret_text}")
+
+    mock_client = MagicMock()
+    mock_client.models.generate_content.side_effect = mock_generate_content
+    monkeypatch.setattr(agent_module.genai, "Client", lambda **kwargs: mock_client)
+
+    result = run_agent("What is my budget?", history=[])
+    assert result.status == "error"
+    assert "SECRET_LEAK_TEST" not in result.answer
+    assert result.answer == "Something went wrong reaching the model. Try again in a moment."
+

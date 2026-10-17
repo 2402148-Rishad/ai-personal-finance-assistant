@@ -6,7 +6,7 @@ import time
 from google import genai
 from google.genai import types
 
-from src.config import MODEL, MAX_AGENT_STEPS, GEMINI_API_KEY
+from src.config import MODEL, MAX_AGENT_STEPS, get_api_key
 from src.logger import log_event
 from src.permissions import check_permission
 from src.prompts import build_system_prompt
@@ -115,7 +115,7 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
 
     try:
         # Initialize authenticated Gemini client
-        client = genai.Client(api_key=GEMINI_API_KEY)
+        client = genai.Client(api_key=get_api_key())
 
         # Build dynamic system prompt with the current date
         system_prompt = build_system_prompt()
@@ -273,7 +273,7 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
         err_msg = str(e)
         # 2.6) error: log any exception with a short message
         log_event("error", {"error": err_msg})
-        answer = f"An error occurred: {err_msg}"
+        answer = "Something went wrong reaching the model. Try again in a moment."
         convo_history = trim_history(convo_history, max_turns=10)
         return AgentResult(
             answer=answer,

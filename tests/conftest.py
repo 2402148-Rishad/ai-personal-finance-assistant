@@ -1,0 +1,35 @@
+"""Pytest configuration and session fixtures."""
+
+import os
+from unittest.mock import MagicMock
+import pytest
+
+# Set GEMINI_API_KEY to "test-key" for the test session so no test needs the real key
+if os.getenv("FINANCE_LIVE_TESTS") != "1":
+    os.environ["GEMINI_API_KEY"] = "test-key"
+else:
+    os.environ.setdefault("GEMINI_API_KEY", "test-key")
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip live tests unless FINANCE_LIVE_TESTS=1 is set."""
+    if os.getenv("FINANCE_LIVE_TESTS") != "1":
+        skip_live = pytest.mark.skip(reason="Live tests skipped unless FINANCE_LIVE_TESTS=1")
+        for item in items:
+            if item.get_closest_marker("live"):
+                item.add_marker(skip_live)
+
+
+@pytest.fixture(autouse=True)
+def mock_genai_client(monkeypatch, request):
+    """Mock genai.Client in all agent tests so no test calls Gemini."""
+    if request.node.get_closest_marker("live"):
+        return
+
+    mock_client = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.text = "Mocked answer"
+    mock_resp.candidates = []
+    mock_client.models.generate_content.return_value = mock_resp
+
+    monkeypatch.setattr("src.agent.genai.Client", lambda api_key=None: mock_client)

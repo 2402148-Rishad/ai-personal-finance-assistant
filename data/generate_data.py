@@ -418,10 +418,6 @@ def save_and_summarize() -> None:
         json.dump(budgets, f, indent=2)
     print(f"[OK] Wrote category budgets to: {budgets_path.name}")
 
-    # Also keep budget.json synchronized for compatibility
-    with open(DATA_DIR / "budget.json", "w", encoding="utf-8") as f:
-        json.dump(budgets, f, indent=2)
-
     # 3. Save data/transactions.csv
     tx_path = DATA_DIR / "transactions.csv"
     with open(tx_path, "w", newline="", encoding="utf-8") as f:
