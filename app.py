@@ -102,6 +102,43 @@ code { color: #78716C !important; background: #F1EEE9 !important; }
     font-size: 0.85rem;
     font-weight: 500;
 }
+div[data-testid="stRadio"] div[role="radiogroup"] {
+    display: flex;
+    flex-direction: row;
+    gap: 1.5rem;
+    border-bottom: 1px solid #E5E7EB;
+    padding-bottom: 0px;
+    margin-bottom: 1rem;
+}
+div[data-testid="stRadio"] div[role="radiogroup"] label[data-baseweb="radio"] {
+    background: transparent !important;
+    border: none !important;
+    padding: 8px 12px !important;
+    margin: 0 !important;
+    cursor: pointer;
+    font-size: 0.95rem;
+    font-weight: 500;
+    color: #4B5563;
+    border-bottom: 2px solid transparent !important;
+    margin-bottom: -1px !important;
+    transition: all 0.15s ease-in-out;
+}
+div[data-testid="stRadio"] div[role="radiogroup"] label[data-baseweb="radio"] > div:first-child {
+    display: none !important;
+}
+div[data-testid="stRadio"] div[role="radiogroup"] label[data-baseweb="radio"]:hover {
+    color: #111827;
+}
+div[data-testid="stRadio"] div[role="radiogroup"] label[data-baseweb="radio"]:has(input:checked) {
+    color: #111827 !important;
+    font-weight: 600 !important;
+    border-bottom: 2px solid #E04836 !important;
+}
+div[data-testid="stRadio"] div[role="radiogroup"] label[data-baseweb="radio"][aria-checked="true"] {
+    color: #111827 !important;
+    font-weight: 600 !important;
+    border-bottom: 2px solid #E04836 !important;
+}
 @media (max-width: 640px) {
     [data-testid="stHorizontalBlock"] {
         flex-direction: column !important;
@@ -194,14 +231,16 @@ with left_col:
     except Exception:
         pass
 
+    def _open_inbox_cb():
+        st.session_state["active_view"] = "Inbox"
+        st.session_state["active_tab"] = "Inbox"
+
     if has_pending:
         b_c1, b_c2 = st.columns([3, 1], vertical_alignment="center")
         with b_c1:
             st.info(banner_text)
         with b_c2:
-            if st.button("Open Inbox", key="open_inbox_banner_btn"):
-                st.session_state.active_tab = "Inbox"
-                st.rerun()
+            st.button("Open Inbox", key="open_inbox_banner_btn", on_click=_open_inbox_cb)
     else:
         st.info(banner_text)
 
@@ -564,99 +603,121 @@ def format_audit_line_english(rec: dict) -> str:
 with right_col:
     pending_items = list_pending(workspace=session_ws)
     pending_count = len(pending_items)
-    inbox_label = f"Inbox ({pending_count})"
-    tab_labels = ["Overview", "Ledger", "Plan", inbox_label]
 
-    cur_active = st.session_state.get("active_tab", "Overview")
-    if cur_active in ["Inbox", "inbox"] or (cur_active and str(cur_active).startswith("Inbox")):
-        default_tab = inbox_label
-    elif cur_active in tab_labels:
-        default_tab = cur_active
-    else:
-        default_tab = "Overview"
+    view_options = ["Overview", "Ledger", "Plan", "Inbox"]
 
-    tab_overview, tab_ledger, tab_plan, tab_inbox = st.tabs(
-        tab_labels, default=default_tab
+    # Support legacy active_tab from tests
+    if "active_tab" in st.session_state and st.session_state["active_tab"] in view_options:
+        if "active_view" not in st.session_state or st.session_state.get("_prev_active_tab") != st.session_state["active_tab"]:
+            st.session_state["active_view"] = st.session_state["active_tab"]
+            st.session_state["_prev_active_tab"] = st.session_state["active_tab"]
+
+    # Normalize Inbox in session state if needed
+    if "active_view" in st.session_state and str(st.session_state["active_view"]).startswith("Inbox"):
+        st.session_state["active_view"] = "Inbox"
+
+    if "active_view" not in st.session_state or st.session_state["active_view"] not in view_options:
+        st.session_state["active_view"] = "Overview"
+
+    def _format_nav_option(opt):
+        s = str(opt)
+        if s == "Inbox" or s.startswith("Inbox ("):
+            return f"Inbox ({pending_count})"
+        return s
+
+    selected_view = st.radio(
+        "Navigation",
+        options=view_options,
+        key="active_view",
+        horizontal=True,
+        label_visibility="collapsed",
+        format_func=_format_nav_option,
+    )
+    if str(selected_view).startswith("Inbox"):
+        selected_view = "Inbox"
+
+    st.session_state["active_tab"] = selected_view
+    st.session_state["_prev_active_tab"] = selected_view
+
+    # Demo checklist: 5 steps ticked when audit.jsonl has the matching human action.
+    # Must work on every view.
+    all_props = read_proposals(workspace=session_ws)
+    audit_recs = read_audit(workspace=session_ws)
+
+    # 1. Add an expense in chat (proposal created or in audit log)
+    step1_done = any(
+        isinstance(p, dict) and p.get("kind") == "add_transactions"
+        for p in all_props.values()
+    ) or any(
+        r.get("action") in ("approve_add_transactions", "add_transaction", "import_transactions")
+        or r.get("kind") == "add_transactions"
+        for r in audit_recs
     )
 
-    with tab_overview:
-        # Demo checklist: 5 steps ticked when audit.jsonl has the matching human action
-        all_props = read_proposals(workspace=session_ws)
-        audit_recs = read_audit(workspace=session_ws)
+    # 2. Approve it (approve action in audit log)
+    step2_done = any(
+        r.get("action") in ("approve_add_transactions", "approve_proposal")
+        or (str(r.get("action", "")).startswith("approve_") and r.get("source") == "human")
+        for r in audit_recs
+    )
 
-        # 1. Add an expense in chat (proposal created or in audit log)
-        step1_done = any(
-            isinstance(p, dict) and p.get("kind") == "add_transactions"
-            for p in all_props.values()
-        ) or any(
-            r.get("action") in ("approve_add_transactions", "add_transaction", "import_transactions")
-            or r.get("kind") == "add_transactions"
-            for r in audit_recs
-        )
+    # 3. Change its category in Ledger (update action in audit log)
+    step3_done = any(
+        r.get("action") in ("update_transaction", "approve_update_transaction")
+        for r in audit_recs
+    )
 
-        # 2. Approve it (approve action in audit log)
-        step2_done = any(
-            r.get("action") in ("approve_add_transactions", "approve_proposal")
-            or (str(r.get("action", "")).startswith("approve_") and r.get("source") == "human")
-            for r in audit_recs
-        )
-
-        # 3. Change its category in Ledger (update action in audit log)
-        step3_done = any(
-            r.get("action") in ("update_transaction", "approve_update_transaction")
-            for r in audit_recs
-        )
-
-        # 4. Propose a budget change in Plan (budget_change proposal created or in audit log)
-        step4_done = any(
-            isinstance(p, dict) and p.get("kind") == "budget_change"
-            for p in all_props.values()
-        ) or any(
-            r.get("action") == "approve_budget_change"
-            or r.get("kind") == "budget_change"
-            or (
-                r.get("action") == "reject_proposal"
-                and (
-                    (isinstance(r.get("before"), dict) and isinstance(r["before"].get("proposal"), dict) and r["before"]["proposal"].get("kind") == "budget_change")
-                    or (isinstance(r.get("before"), dict) and r["before"].get("kind") == "budget_change")
-                )
-            )
-            for r in audit_recs
-        )
-
-        # 5. Reject it (reject action in audit log)
-        step5_done = any(
+    # 4. Propose a budget change in Plan (budget_change proposal created or in audit log)
+    step4_done = any(
+        isinstance(p, dict) and p.get("kind") == "budget_change"
+        for p in all_props.values()
+    ) or any(
+        r.get("action") == "approve_budget_change"
+        or r.get("kind") == "budget_change"
+        or (
             r.get("action") == "reject_proposal"
-            for r in audit_recs
+            and (
+                (isinstance(r.get("before"), dict) and isinstance(r["before"].get("proposal"), dict) and r["before"]["proposal"].get("kind") == "budget_change")
+                or (isinstance(r.get("before"), dict) and r["before"].get("kind") == "budget_change")
+            )
         )
+        for r in audit_recs
+    )
 
-        all_steps_done = (
-            step1_done and step2_done and step3_done and step4_done and step5_done
-        )
+    # 5. Reject it (reject action in audit log)
+    step5_done = any(
+        r.get("action") == "reject_proposal"
+        for r in audit_recs
+    )
 
-        if not all_steps_done:
-            st.session_state["demo_step_1"] = step1_done
-            st.session_state["demo_step_2"] = step2_done
-            st.session_state["demo_step_3"] = step3_done
-            st.session_state["demo_step_4"] = step4_done
-            st.session_state["demo_step_5"] = step5_done
+    all_steps_done = (
+        step1_done and step2_done and step3_done and step4_done and step5_done
+    )
 
-            with st.container(border=True):
-                st.markdown("### Your demo checklist")
-                st.checkbox("1. Add an expense in chat", disabled=True, key="demo_step_1")
-                st.checkbox("2. Approve it", disabled=True, key="demo_step_2")
-                st.checkbox("3. Change its category in Ledger", disabled=True, key="demo_step_3")
-                st.checkbox("4. Propose a budget change in Plan", disabled=True, key="demo_step_4")
-                st.checkbox("5. Reject it", disabled=True, key="demo_step_5")
-        else:
-            if st.button("Start again", key="demo_start_again_btn"):
-                reset_workspace(st.session_state.session_id)
-                set_active_workspace(session_ws)
-                st.session_state.display = []
-                st.session_state.history = []
-                st.session_state.input_key += 1
-                st.rerun()
+    if not all_steps_done:
+        st.session_state["demo_step_1"] = step1_done
+        st.session_state["demo_step_2"] = step2_done
+        st.session_state["demo_step_3"] = step3_done
+        st.session_state["demo_step_4"] = step4_done
+        st.session_state["demo_step_5"] = step5_done
 
+        with st.container(border=True):
+            st.markdown("### Your demo checklist")
+            st.checkbox("1. Add an expense in chat", disabled=True, key="demo_step_1")
+            st.checkbox("2. Approve it", disabled=True, key="demo_step_2")
+            st.checkbox("3. Change its category in Ledger", disabled=True, key="demo_step_3")
+            st.checkbox("4. Propose a budget change in Plan", disabled=True, key="demo_step_4")
+            st.checkbox("5. Reject it", disabled=True, key="demo_step_5")
+    else:
+        if st.button("Start again", key="demo_start_again_btn"):
+            reset_workspace(st.session_state.session_id)
+            set_active_workspace(session_ws)
+            st.session_state.display = []
+            st.session_state.history = []
+            st.session_state.input_key += 1
+            st.rerun()
+
+    if selected_view == "Overview":
         # Month selector dynamically built from get_data_overview()
         overview = get_data_overview()
         available_months = overview.get("months") or ["2026-06", "2026-07", "2026-08"]
@@ -769,7 +830,7 @@ with right_col:
 
         st.caption(f"As of {sandbox_today}")
 
-    with tab_ledger:
+    elif selected_view == "Ledger":
         st.subheader("Ledger")
 
         # 1. Add form (date, description, amount, type, category)
@@ -1047,7 +1108,7 @@ with right_col:
                             else:
                                 st.warning("Please check the confirm box before deleting.")
 
-    with tab_plan:
+    elif selected_view == "Plan":
         st.subheader("Plan")
 
         # 1. Budgets: a table of categories with limit and spent, and an Edit limit form
@@ -1240,7 +1301,7 @@ with right_col:
         st.markdown("### Goals and Preferences")
         st.write("Coming in Phase 5")
 
-    with tab_inbox:
+    elif selected_view == "Inbox" or str(selected_view).startswith("Inbox"):
         st.subheader("Inbox")
 
         next_undo_str = get_next_undo_line(workspace=session_ws)

@@ -52,6 +52,8 @@ def test_apptest_budget_edit_creates_pending_card_and_leaves_budgets_unchanged()
         dining_orig = budgets_before["Dining"]
 
         # Select Dining and enter new limit
+        at.session_state["active_view"] = "Plan"
+        at.run()
         cat_select = next((s for s in at.selectbox if s.key == "edit_budget_category"), None)
         assert cat_select is not None
         if "Dining" in cat_select.options:
@@ -78,6 +80,8 @@ def test_apptest_budget_edit_creates_pending_card_and_leaves_budgets_unchanged()
         p_id = str(dining_props[0].get("id") or dining_props[0].get("proposal_id"))
 
         # Proposal card must exist in the UI
+        at.session_state["active_view"] = "Inbox"
+        at.run()
         approve_btn = next((b for b in at.button if b.key == f"approve_btn_{p_id}"), None)
         assert approve_btn is not None
         reject_btn = next((b for b in at.button if b.key == f"reject_btn_{p_id}"), None)
@@ -96,6 +100,7 @@ def test_apptest_high_risk_approve_stays_disabled_until_confirm():
         res_data = json.loads(res_raw)
         p_id = res_data["proposal_id"]
 
+        at.session_state["active_view"] = "Inbox"
         at.run()
 
         # Find the Approve button for this proposal
@@ -137,6 +142,7 @@ def test_apptest_approve_low_risk_updates_ledger_and_undo_restores_it():
             }
         ])
 
+        at.session_state["active_view"] = "Inbox"
         at.run()
 
         # Find proposal in list_pending
@@ -186,6 +192,7 @@ def test_apptest_expired_proposal_shows_expired_and_no_buttons():
             expires_at="2026-08-01T00:00:00",
         )
 
+        at.session_state["active_view"] = "Inbox"
         at.run()
 
         # Expired proposal must NOT have Approve or Reject buttons
@@ -223,13 +230,15 @@ def test_apptest_inbox_tab_label_and_activity_log():
         at.run()
 
         # Check tab label includes pending count
-        tab_labels = [tab.label for tab in at.tabs]
+        tab_labels = [tab.label for tab in at.tabs] if at.tabs else [r.options for r in at.radio if r.key == "active_view"][0]
         inbox_tab = next((lbl for lbl in tab_labels if "Inbox" in lbl), None)
         assert inbox_tab is not None
         pending_count = len(list_pending(workspace=app_ws))
         assert f"Inbox ({pending_count})" in inbox_tab
 
         # Check activity log in UI contains "Added 3 transactions (you)"
+        at.session_state["active_view"] = "Inbox"
+        at.run()
         plain_log_found = any("Added 3 transactions (you)" in str(m.value) for m in at.markdown)
         assert plain_log_found is True
 
@@ -242,6 +251,8 @@ def test_apptest_plan_tab_bills_and_phase_5():
         set_active_workspace(app_ws)
 
         # Check "Coming in Phase 5" appears in the Plan tab
+        at.session_state["active_view"] = "Plan"
+        at.run()
         has_phase5 = any("Coming in Phase 5" in str(m.value) for m in at.markdown)
         assert has_phase5 is True
 

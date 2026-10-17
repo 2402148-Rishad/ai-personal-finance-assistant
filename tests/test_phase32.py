@@ -48,6 +48,8 @@ def test_apptest_added_expense_appears_in_month_total():
         dining_before = data_before.get("spending_by_category", {}).get("Dining", 0.0)
 
         # Add an expense in Dining: $45.00 on 2026-08-15
+        at.session_state["active_view"] = "Ledger"
+        at.run()
         at.text_input(key="add_tx_date").input("2026-08-15")
         at.text_input(key="add_tx_desc").input("AppTest Dinner Expense")
         at.text_input(key="add_tx_amount").input("45.00")
@@ -81,6 +83,8 @@ def test_apptest_bad_amount_shows_error_and_writes_nothing():
         count_before = len(tx_df_before)
 
         # Enter bad amount: -100.00
+        at.session_state["active_view"] = "Ledger"
+        at.run()
         at.text_input(key="add_tx_date").input("2026-08-15")
         at.text_input(key="add_tx_desc").input("Invalid Amount Item")
         at.text_input(key="add_tx_amount").input("-100.00")
@@ -115,6 +119,8 @@ def test_apptest_upload_with_one_bad_row_imports_only_good_rows():
         count_before = len(tx_df_before)
 
         # Upload the CSV
+        at.session_state["active_view"] = "Ledger"
+        at.run()
         at.file_uploader[0].upload("import_sample.csv", csv_content, "text/csv").run()
 
         # Find import button (should say "Import 2 Valid Rows")

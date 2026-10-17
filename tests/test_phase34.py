@@ -205,6 +205,8 @@ def test_apptest_error_state_and_independent_features():
         assert any("Couldn't reach the model. Try again in a moment." in str(e.value) for e in at.error)
 
         # Ledger add still works without model
+        at.session_state["active_view"] = "Ledger"
+        at.run()
         at.text_input(key="add_tx_date").input("2026-08-15")
         at.text_input(key="add_tx_desc").input("Manual Offline Add")
         at.text_input(key="add_tx_amount").input("33.00")
