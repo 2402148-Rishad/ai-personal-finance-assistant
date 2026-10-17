@@ -27,6 +27,11 @@ TOOL_TIERS = {
 
     # Proposal tools
     "propose_budget_change": Tier.PROPOSE,
+    "propose_add_transactions": Tier.PROPOSE,
+    "propose_update_transaction": Tier.PROPOSE,
+    "propose_delete_transaction": Tier.PROPOSE,
+    "propose_bill_change": Tier.PROPOSE,
+    "revise_proposal": Tier.PROPOSE,
 }
 
 

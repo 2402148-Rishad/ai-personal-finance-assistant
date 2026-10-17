@@ -4,46 +4,57 @@ import json
 from pathlib import Path
 
 from src.agent import run_agent
-from src.approvals import request_approval, confirm_approval
+from src.approvals import (
+    approve,
+    reject,
+    undo,
+    list_pending,
+    request_approval,
+    confirm_approval,
+)
 
 PROPOSALS_PATH = Path(__file__).resolve().parent / "logs" / "pending_proposals.json"
 
 
-def handle_pending_command():
-    """List pending budget proposals from logs/pending_proposals.json."""
-    if not PROPOSALS_PATH.exists():
-        print("No pending proposals.")
-        return
-
+def handle_pending_command(workspace=None):
+    """List pending proposals from active workspace (<workspace>/proposals.json)."""
+    proposals_dict = {}
     try:
-        with open(PROPOSALS_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        pending_list = list_pending(workspace=workspace)
+        proposals_dict = {str(p.get("id") or p.get("proposal_id")): p for p in pending_list}
     except Exception:
-        print("No pending proposals.")
-        return
+        try:
+            from src.store import read_proposals
+            proposals_dict = read_proposals(workspace=workspace)
+        except Exception:
+            proposals_dict = {}
 
-    if not data:
-        print("No pending proposals.")
-        return
+    if not proposals_dict and PROPOSALS_PATH.exists():
+        try:
+            with open(PROPOSALS_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    proposals_dict = data
+                elif isinstance(data, list):
+                    proposals_dict = {str(p.get("id") or p.get("proposal_id") or i): p for i, p in enumerate(data) if isinstance(p, dict)}
+        except Exception:
+            pass
 
-    if isinstance(data, dict):
-        proposals = list(data.values())
-    elif isinstance(data, list):
-        proposals = data
-    else:
-        proposals = []
-
-    if not proposals:
+    if not proposals_dict:
         print("No pending proposals.")
         return
 
     print("\nPending Proposals:")
-    for p in proposals:
-        p_id = p.get("id", "N/A")
-        cat = p.get("category", "N/A")
-        old_l = p.get("old_limit", "N/A")
-        new_l = p.get("new_limit", "N/A")
-        print(f"ID: {p_id} | Category: {cat} | Old Limit: ${old_l} | New Limit: ${new_l}")
+    for p_id, p in proposals_dict.items():
+        kind = p.get("kind", "budget_change")
+        risk = p.get("risk", "low")
+        cat = p.get("category")
+        if cat:
+            old_l = p.get("old_limit", "N/A")
+            new_l = p.get("new_limit", "N/A")
+            print(f"ID: {p_id} | Kind: {kind} | Category: {cat} | Old Limit: ${old_l} | New Limit: ${new_l} | Risk: {risk}")
+        else:
+            print(f"ID: {p_id} | Kind: {kind} | Risk: {risk}")
 
 
 def main():
@@ -72,21 +83,43 @@ def main():
                 handle_pending_command()
                 continue
 
-            if user_input == "/apply" or user_input.startswith("/apply "):
+            if user_input.startswith("/approve") or user_input.startswith("/apply"):
                 parts = user_input.split()
+                cmd = parts[0]
                 if len(parts) < 2 or not parts[1].strip():
-                    print("Usage: /apply <proposal_id>")
+                    print(f"Usage: {cmd} <proposal_id>")
                     continue
                 proposal_id = parts[1].strip()
-                approval_req = request_approval(proposal_id)
-                if approval_req.get("status") == "error" or "error" in approval_req:
-                    print(json.dumps(approval_req))
+                proposals = list_pending()
+                matched_proposal = next((p for p in proposals if str(p.get("id") or p.get("proposal_id")) == proposal_id), None)
+                if not matched_proposal:
+                    from src.store import read_proposals
+                    raw_props = read_proposals()
+                    matched_proposal = raw_props.get(proposal_id)
+
+                if not matched_proposal:
+                    print(f"Proposal '{proposal_id}' not found.")
                     continue
-                print(f"Category:  {approval_req['category']}")
-                print(f"Old Limit: ${approval_req['old_limit']}")
-                print(f"New Limit: ${approval_req['new_limit']}")
-                answer = input("Type exactly 'yes' to confirm: ")
-                result = confirm_approval(proposal_id, answer)
+
+                risk = str(matched_proposal.get("risk", "low")).lower()
+                prompt_str = "Type exactly 'CONFIRM' to confirm: " if risk == "high" else "Type exactly 'yes' to confirm: "
+                answer = input(prompt_str).strip()
+                result = approve(proposal_id, answer)
+                print(json.dumps(result))
+                continue
+
+            if user_input.startswith("/reject"):
+                parts = user_input.split()
+                if len(parts) < 2 or not parts[1].strip():
+                    print("Usage: /reject <proposal_id>")
+                    continue
+                proposal_id = parts[1].strip()
+                result = reject(proposal_id)
+                print(json.dumps(result))
+                continue
+
+            if user_input == "/undo":
+                result = undo()
                 print(json.dumps(result))
                 continue
 

@@ -20,6 +20,28 @@ except ImportError:
         def resolve_period(text):
             return text
 
+try:
+    from src.validators import (
+        validate_amount,
+        validate_date,
+        validate_category,
+        validate_text,
+        get_workspace_categories,
+    )
+except ImportError:
+    from validators import (
+        validate_amount,
+        validate_date,
+        validate_category,
+        validate_text,
+        get_workspace_categories,
+    )
+
+try:
+    import src.store as store
+except ImportError:
+    import store
+
 
 class JsonDict(str):
     """String subclass containing JSON that also allows dict-like access for Python callers."""
@@ -534,27 +556,166 @@ def find_possible_duplicates(month: str) -> str:
         return json.dumps({"error": str(e)})
 
 
-def propose_budget_change(category: str, new_limit: float) -> str:
-    """Propose a change to a budget category limit, saving to pending proposals without modifying budgets.json."""
+def _sync_legacy_proposals(proposal_id: str, proposal: dict) -> None:
+    """Sync proposal to PROPOSALS_PATH to maintain compatibility with isolated tests."""
+    if PROPOSALS_PATH:
+        try:
+            PROPOSALS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            p_data = {}
+            if PROPOSALS_PATH.exists():
+                with open(PROPOSALS_PATH, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        p_data = data
+                    elif isinstance(data, list):
+                        p_data = {str(p.get("id") or p.get("proposal_id")): p for p in data if isinstance(p, dict)}
+            p_data[proposal_id] = proposal
+            with open(PROPOSALS_PATH, "w", encoding="utf-8") as f:
+                json.dump(p_data, f, indent=2)
+        except Exception:
+            pass
+
+
+def propose_budget_change(
+    category: str,
+    new_limit: float | None = None,
+    action: str | None = None,
+) -> str:
+    """Propose a change to a budget category limit, add a new category, or remove a category.
+
+    Does not modify budgets.json; saves to pending proposals.
+    Output keys remain: proposal_id, category, old_limit, new_limit, status, message (or error, category, current_limit, maximum_allowed, status).
+    """
     try:
         b_path = _get_budgets_path()
+        workspace_dir = b_path.parent
         if not b_path.exists():
             return json.dumps({"error": f"Budgets file not found at {b_path}"})
 
         with open(b_path, "r", encoding="utf-8") as f:
             budgets = json.load(f)
 
-        # Validate that category exists in budgets.json
+        if category is None or not str(category).strip():
+            return json.dumps({"error": "Category cannot be empty."})
+
+        cat_str = str(category).strip()
+        action_clean = str(action).strip().lower() if action is not None else None
+
+        # Check existing category match
         matched_cat = None
         for cat in budgets.keys():
-            if cat.lower() == category.strip().lower():
+            if cat.lower() == cat_str.lower():
                 matched_cat = cat
                 break
 
+        # Action: Remove category
+        if action_clean in ("remove", "delete"):
+            if not matched_cat:
+                return json.dumps({"error": f"Category '{category}' does not exist in budgets."})
+
+            old_limit = float(budgets[matched_cat])
+            risk = "high"
+            preview = {"before": round(old_limit, 2), "after": None}
+            proposal_id = f"prop_{uuid.uuid4().hex[:8]}"
+
+            proposal = store.create_proposal(
+                kind="budget_change",
+                payload={"category": matched_cat, "action": "remove", "new_limit": 0.0},
+                preview=preview,
+                risk=risk,
+                workspace=workspace_dir,
+                proposal_id=proposal_id,
+                category=matched_cat,
+                old_limit=round(old_limit, 2),
+                new_limit=0.0,
+            )
+
+            _sync_legacy_proposals(proposal_id, proposal)
+
+            log_event(
+                "budget_proposed",
+                {
+                    "proposal_id": proposal_id,
+                    "category": matched_cat,
+                    "old_limit": round(old_limit, 2),
+                    "new_limit": 0.0,
+                    "action": "remove",
+                },
+            )
+
+            return json.dumps({
+                "proposal_id": proposal_id,
+                "category": matched_cat,
+                "old_limit": round(old_limit, 2),
+                "new_limit": 0.0,
+                "status": "pending_confirmation",
+                "message": f"Proposal {proposal_id} created to remove category '{matched_cat}'. User confirmation in terminal required.",
+            })
+
+        # Action: Create new category
+        if action_clean in ("add", "create", "new"):
+            ok, clean_cat = validate_text(category)
+            if not ok:
+                return json.dumps({"error": str(clean_cat)})
+
+            if matched_cat:
+                return json.dumps({"error": f"Category '{matched_cat}' already exists in budgets. Use update to change its limit."})
+
+            if new_limit is None:
+                return json.dumps({"error": "new_limit is required to create a new category."})
+
+            ok, limit_val = validate_amount(new_limit)
+            if not ok:
+                return json.dumps({"error": str(limit_val)})
+
+            if limit_val < 1.0 or limit_val > 10000.0:
+                return json.dumps({"error": f"New category budget limit must be between 1 and 10000, got {limit_val}."})
+
+            risk = "low"
+            preview = {"before": None, "after": round(limit_val, 2)}
+            proposal_id = f"prop_{uuid.uuid4().hex[:8]}"
+
+            proposal = store.create_proposal(
+                kind="budget_change",
+                payload={"category": clean_cat, "action": "add", "new_limit": round(limit_val, 2)},
+                preview=preview,
+                risk=risk,
+                workspace=workspace_dir,
+                proposal_id=proposal_id,
+                category=clean_cat,
+                old_limit=None,
+                new_limit=round(limit_val, 2),
+            )
+
+            _sync_legacy_proposals(proposal_id, proposal)
+
+            log_event(
+                "budget_proposed",
+                {
+                    "proposal_id": proposal_id,
+                    "category": clean_cat,
+                    "old_limit": None,
+                    "new_limit": round(limit_val, 2),
+                    "action": "add",
+                },
+            )
+
+            return json.dumps({
+                "proposal_id": proposal_id,
+                "category": clean_cat,
+                "old_limit": None,
+                "new_limit": round(limit_val, 2),
+                "status": "pending_confirmation",
+                "message": f"Proposal {proposal_id} created for {clean_cat}: new limit ${limit_val:.2f}. User confirmation in terminal required.",
+            })
+
+        # Update existing category (action_clean is None or 'update')
         if not matched_cat:
             return json.dumps({"error": f"Category '{category}' does not exist in budgets."})
 
-        # Validate that new_limit is a number greater than 0
+        if new_limit is None:
+            return json.dumps({"error": "new_limit is required to update budget limit."})
+
         try:
             limit_val = float(new_limit)
         except (ValueError, TypeError):
@@ -584,35 +745,22 @@ def propose_budget_change(category: str, new_limit: float) -> str:
             })
 
         proposal_id = f"prop_{uuid.uuid4().hex[:8]}"
-        timestamp = datetime.now().isoformat()
+        risk = "low"
+        preview = {"before": round(old_limit, 2), "after": round(limit_val, 2)}
 
-        # Ensure logs directory exists
-        LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        proposal = store.create_proposal(
+            kind="budget_change",
+            payload={"category": matched_cat, "action": "update", "new_limit": round(limit_val, 2)},
+            preview=preview,
+            risk=risk,
+            workspace=workspace_dir,
+            proposal_id=proposal_id,
+            category=matched_cat,
+            old_limit=round(old_limit, 2),
+            new_limit=round(limit_val, 2),
+        )
 
-        # Load existing pending proposals
-        proposals = {}
-        if PROPOSALS_PATH.exists():
-            try:
-                with open(PROPOSALS_PATH, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    if isinstance(data, dict):
-                        proposals = data
-                    elif isinstance(data, list):
-                        proposals = {p["id"]: p for p in data if isinstance(p, dict) and "id" in p}
-            except Exception:
-                proposals = {}
-
-        # Save proposal to logs/pending_proposals.json
-        proposals[proposal_id] = {
-            "id": proposal_id,
-            "category": matched_cat,
-            "old_limit": round(old_limit, 2),
-            "new_limit": round(limit_val, 2),
-            "timestamp": timestamp,
-        }
-
-        with open(PROPOSALS_PATH, "w", encoding="utf-8") as f:
-            json.dump(proposals, f, indent=2)
+        _sync_legacy_proposals(proposal_id, proposal)
 
         # Log budget_proposed event: proposal ID, category, old and new limit
         log_event(
@@ -635,6 +783,673 @@ def propose_budget_change(category: str, new_limit: float) -> str:
         })
     except Exception as e:
         return json.dumps({"error": str(e)})
+
+
+def propose_add_transactions(items: list | str) -> str:
+    """Propose adding up to 10 new transactions.
+
+    Validates date, description, amount, category, and type with validators.py.
+    Checks for missing/ambiguous fields and duplicate charges.
+    Risk is 'low'. Does not write to data files.
+    """
+    try:
+        if isinstance(items, str):
+            try:
+                items = json.loads(items)
+            except Exception:
+                return json.dumps({"error": "Invalid JSON for items parameter.", "status": "error"})
+
+        if not isinstance(items, list):
+            return json.dumps({"error": "items must be a list of transaction objects.", "status": "error"})
+
+        if len(items) == 0:
+            return json.dumps({"error": "items list cannot be empty.", "status": "error"})
+
+        if len(items) > 10:
+            return json.dumps({"error": "Cannot propose more than 10 transactions at once.", "status": "error"})
+
+        tx_path = _get_transactions_path()
+        workspace_dir = tx_path.parent
+
+        validated_items = []
+        has_duplicate = False
+        duplicate_warnings = []
+
+        # Load existing transactions for duplicate detection
+        existing_tx = []
+        if tx_path.exists():
+            try:
+                df = pd.read_csv(tx_path)
+                existing_tx = df.to_dict(orient="records")
+            except Exception:
+                existing_tx = []
+
+        for idx, item in enumerate(items):
+            if not isinstance(item, dict):
+                return json.dumps({"error": f"Item at index {idx} must be a dictionary.", "status": "error"})
+
+            # Check missing fields
+            missing_fields = []
+            for req in ("date", "description", "amount", "category", "type"):
+                if req not in item or item[req] is None or (isinstance(item[req], str) and not item[req].strip()):
+                    missing_fields.append(req)
+
+            if missing_fields:
+                options = {}
+                if "category" in missing_fields:
+                    options["category"] = sorted(list(get_workspace_categories(workspace=workspace_dir)))
+                if "type" in missing_fields:
+                    options["type"] = ["expense", "income"]
+                return json.dumps({
+                    "status": "needs_clarification",
+                    "missing": missing_fields,
+                    "options": options,
+                    "message": f"Item {idx + 1} is missing required fields: {', '.join(missing_fields)}.",
+                })
+
+            # Check ambiguous type
+            raw_type = str(item["type"]).strip().lower()
+            if raw_type not in ("expense", "income"):
+                return json.dumps({
+                    "status": "needs_clarification",
+                    "missing": ["type"],
+                    "options": {"type": ["expense", "income"]},
+                    "message": f"Item {idx + 1} has ambiguous type '{item['type']}'. Must be 'expense' or 'income'.",
+                })
+
+            # Validate amount with validators.py
+            ok, amt_val = validate_amount(item["amount"])
+            if not ok:
+                return json.dumps({"error": str(amt_val), "status": "error"})
+
+            # Validate date with validators.py
+            ok, date_val = validate_date(item["date"], workspace=workspace_dir)
+            if not ok:
+                return json.dumps({"error": str(date_val), "status": "error"})
+
+            # Validate category with validators.py
+            ok, cat_val = validate_category(item["category"], workspace=workspace_dir)
+            if not ok:
+                return json.dumps({"error": str(cat_val), "status": "error"})
+
+            # Validate description with validators.py
+            ok, desc_val = validate_text(item["description"])
+            if not ok:
+                return json.dumps({"error": str(desc_val), "status": "error"})
+
+            validated_item = {
+                "date": date_val,
+                "description": desc_val,
+                "amount": amt_val,
+                "category": cat_val,
+                "type": raw_type,
+            }
+            validated_items.append(validated_item)
+
+            # Check for existing duplicate: same date, description, amount
+            for existing in existing_tx:
+                e_date = str(existing.get("date", "")).strip()
+                e_desc = str(existing.get("description", "")).strip().lower()
+                try:
+                    e_amt = float(existing.get("amount", 0.0))
+                except (ValueError, TypeError):
+                    e_amt = None
+
+                if e_date == date_val and e_desc == desc_val.lower() and e_amt is not None and abs(e_amt - amt_val) < 0.001:
+                    has_duplicate = True
+                    duplicate_warnings.append(f"Transaction on {date_val} for '{desc_val}' (${amt_val:.2f}) matches existing record.")
+                    break
+
+        preview = {
+            "before": None,
+            "after": validated_items,
+        }
+        if has_duplicate:
+            preview["possible_duplicate"] = True
+            preview["warning"] = "Possible duplicate of existing transaction."
+            if duplicate_warnings:
+                preview["duplicate_warnings"] = duplicate_warnings
+
+        proposal_id = f"prop_{uuid.uuid4().hex[:8]}"
+        proposal = store.create_proposal(
+            kind="add_transactions",
+            payload={"items": validated_items},
+            preview=preview,
+            risk="low",
+            workspace=workspace_dir,
+            proposal_id=proposal_id,
+        )
+
+        _sync_legacy_proposals(proposal_id, proposal)
+
+        log_event("transactions_proposed", {"proposal_id": proposal_id, "count": len(validated_items), "risk": "low"})
+
+        return json.dumps({
+            "proposal_id": proposal_id,
+            "kind": "add_transactions",
+            "items": validated_items,
+            "preview": preview,
+            "risk": "low",
+            "status": "pending_confirmation",
+            "message": f"Proposal {proposal_id} created to add {len(validated_items)} transaction(s).",
+        })
+    except Exception as e:
+        return json.dumps({"error": str(e), "status": "error"})
+
+
+def propose_update_transaction(transaction_id: str, fields: dict | str) -> str:
+    """Propose an update to an existing transaction.
+
+    Fields may include amount, category, date, and description.
+    Preview shows old and new values.
+    Risk is 'low', or 'high' if amount changes by >500.
+    """
+    try:
+        if isinstance(fields, str):
+            try:
+                fields = json.loads(fields)
+            except Exception:
+                return json.dumps({"error": "Invalid JSON for fields parameter.", "status": "error"})
+
+        if not isinstance(fields, dict) or not fields:
+            return json.dumps({"error": "fields must be a non-empty dictionary.", "status": "error"})
+
+        tx_path = _get_transactions_path()
+        workspace_dir = tx_path.parent
+
+        if not tx_path.exists():
+            return json.dumps({"error": "Transactions file not found.", "status": "error"})
+
+        tx_df = store.read_csv("transactions.csv", data_dir=workspace_dir)
+        if "id" not in tx_df.columns:
+            tx_df = store.ensure_transaction_ids(tx_df)
+
+        matched_rows = tx_df[tx_df["id"].astype(str) == str(transaction_id).strip()]
+        if matched_rows.empty:
+            return json.dumps({"error": f"Transaction '{transaction_id}' not found.", "status": "error"})
+
+        old_row = matched_rows.iloc[0].to_dict()
+        # Clean nan values
+        old_row = {k: ("" if pd.isna(v) else v) for k, v in old_row.items()}
+        validated_fields = {}
+
+        # Validate amount if present
+        if "amount" in fields:
+            ok, amt_val = validate_amount(fields["amount"])
+            if not ok:
+                return json.dumps({"error": str(amt_val), "status": "error"})
+            validated_fields["amount"] = amt_val
+
+        # Validate date if present
+        if "date" in fields:
+            ok, date_val = validate_date(fields["date"], workspace=workspace_dir)
+            if not ok:
+                return json.dumps({"error": str(date_val), "status": "error"})
+            validated_fields["date"] = date_val
+            if "month" in old_row:
+                validated_fields["month"] = date_val[:7]
+
+        # Validate category if present
+        if "category" in fields:
+            ok, cat_val = validate_category(fields["category"], workspace=workspace_dir)
+            if not ok:
+                return json.dumps({"error": str(cat_val), "status": "error"})
+            validated_fields["category"] = cat_val
+
+        # Validate description if present
+        if "description" in fields:
+            ok, desc_val = validate_text(fields["description"])
+            if not ok:
+                return json.dumps({"error": str(desc_val), "status": "error"})
+            validated_fields["description"] = desc_val
+
+        if not validated_fields:
+            return json.dumps({"error": "No valid fields provided to update.", "status": "error"})
+
+        # Risk assessment: low, or high if amount changes by > 500
+        risk = "low"
+        if "amount" in validated_fields:
+            try:
+                old_amount = float(old_row.get("amount", 0.0))
+                new_amount = float(validated_fields["amount"])
+                if abs(new_amount - old_amount) > 500.0:
+                    risk = "high"
+            except (ValueError, TypeError):
+                pass
+
+        new_row = dict(old_row)
+        new_row.update(validated_fields)
+
+        preview = {
+            "before": old_row,
+            "after": new_row,
+        }
+
+        proposal_id = f"prop_{uuid.uuid4().hex[:8]}"
+        proposal = store.create_proposal(
+            kind="update_transaction",
+            payload={"transaction_id": str(transaction_id).strip(), "fields": validated_fields},
+            preview=preview,
+            risk=risk,
+            workspace=workspace_dir,
+            proposal_id=proposal_id,
+        )
+
+        _sync_legacy_proposals(proposal_id, proposal)
+
+        log_event("transaction_update_proposed", {"proposal_id": proposal_id, "transaction_id": transaction_id, "risk": risk})
+
+        return json.dumps({
+            "proposal_id": proposal_id,
+            "kind": "update_transaction",
+            "transaction_id": str(transaction_id).strip(),
+            "preview": preview,
+            "risk": risk,
+            "status": "pending_confirmation",
+            "message": f"Proposal {proposal_id} created to update transaction {transaction_id}.",
+        })
+    except Exception as e:
+        return json.dumps({"error": str(e), "status": "error"})
+
+
+def propose_delete_transaction(transaction_id: str) -> str:
+    """Propose deletion of a transaction. Risk is 'high'."""
+    try:
+        tx_path = _get_transactions_path()
+        workspace_dir = tx_path.parent
+
+        if not tx_path.exists():
+            return json.dumps({"error": "Transactions file not found.", "status": "error"})
+
+        tx_df = store.read_csv("transactions.csv", data_dir=workspace_dir)
+        if "id" not in tx_df.columns:
+            tx_df = store.ensure_transaction_ids(tx_df)
+
+        matched_rows = tx_df[tx_df["id"].astype(str) == str(transaction_id).strip()]
+        if matched_rows.empty:
+            return json.dumps({"error": f"Transaction '{transaction_id}' not found.", "status": "error"})
+
+        old_row = matched_rows.iloc[0].to_dict()
+        old_row = {k: ("" if pd.isna(v) else v) for k, v in old_row.items()}
+
+        preview = {
+            "before": old_row,
+            "after": None,
+        }
+
+        proposal_id = f"prop_{uuid.uuid4().hex[:8]}"
+        proposal = store.create_proposal(
+            kind="delete_transaction",
+            payload={"transaction_id": str(transaction_id).strip()},
+            preview=preview,
+            risk="high",
+            workspace=workspace_dir,
+            proposal_id=proposal_id,
+        )
+
+        _sync_legacy_proposals(proposal_id, proposal)
+
+        log_event("transaction_delete_proposed", {"proposal_id": proposal_id, "transaction_id": transaction_id, "risk": "high"})
+
+        return json.dumps({
+            "proposal_id": proposal_id,
+            "kind": "delete_transaction",
+            "transaction_id": str(transaction_id).strip(),
+            "preview": preview,
+            "risk": "high",
+            "status": "pending_confirmation",
+            "message": f"Proposal {proposal_id} created to delete transaction {transaction_id}.",
+        })
+    except Exception as e:
+        return json.dumps({"error": str(e), "status": "error"})
+
+
+def propose_bill_change(
+    action: str,
+    bill_name: str,
+    amount: float | None = None,
+    due_day: int | None = None,
+    category: str | None = None,
+    new_bill_name: str | None = None,
+) -> str:
+    """Propose adding, editing, or cancelling a recurring bill.
+
+    Actions:
+      - 'add': requires bill_name, amount, due_day, category. Risk: 'low'.
+      - 'edit': requires bill_name, plus any updated fields. Risk: 'low'.
+      - 'cancel': requires bill_name. Risk: 'high'.
+    """
+    try:
+        action_clean = str(action).strip().lower()
+        if action_clean not in ("add", "edit", "cancel"):
+            return json.dumps({
+                "error": f"Invalid action '{action}'. Must be 'add', 'edit', or 'cancel'.",
+                "status": "error",
+            })
+
+        bills_path = _get_bills_path()
+        workspace_dir = bills_path.parent
+
+        if not bills_path.exists():
+            return json.dumps({"error": "Bills file not found.", "status": "error"})
+
+        bills_df = store.read_csv("bills.csv", data_dir=workspace_dir)
+
+        def find_bill(name: str):
+            clean_name = str(name).strip().lower()
+            for idx, r in bills_df.iterrows():
+                if str(r.get("bill_name", "")).strip().lower() == clean_name:
+                    d = r.to_dict()
+                    return {k: ("" if pd.isna(v) else v) for k, v in d.items()}
+            return None
+
+        if action_clean == "add":
+            ok, clean_bill_name = validate_text(bill_name)
+            if not ok:
+                return json.dumps({"error": str(clean_bill_name), "status": "error"})
+
+            if amount is None:
+                return json.dumps({"error": "amount is required to add a bill.", "status": "error"})
+            ok, amt_val = validate_amount(amount)
+            if not ok:
+                return json.dumps({"error": str(amt_val), "status": "error"})
+
+            if due_day is None:
+                return json.dumps({"error": "due_day is required to add a bill.", "status": "error"})
+            try:
+                day_val = int(due_day)
+            except (ValueError, TypeError):
+                return json.dumps({"error": f"due_day '{due_day}' must be an integer between 1 and 31.", "status": "error"})
+            if day_val < 1 or day_val > 31:
+                return json.dumps({"error": f"due_day must be between 1 and 31, got {day_val}.", "status": "error"})
+
+            if not category:
+                return json.dumps({"error": "category is required to add a bill.", "status": "error"})
+            ok, cat_val = validate_category(category, workspace=workspace_dir)
+            if not ok:
+                return json.dumps({"error": str(cat_val), "status": "error"})
+
+            new_bill = {
+                "bill_name": clean_bill_name,
+                "amount": amt_val,
+                "due_day": day_val,
+                "category": cat_val,
+            }
+            preview = {"before": None, "after": new_bill}
+            risk = "low"
+            payload = {"action": "add", "bill": new_bill}
+
+        elif action_clean == "edit":
+            old_bill = find_bill(bill_name)
+            if not old_bill:
+                return json.dumps({"error": f"Bill '{bill_name}' not found.", "status": "error"})
+
+            updated_bill = dict(old_bill)
+            if new_bill_name is not None:
+                ok, clean_name = validate_text(new_bill_name)
+                if not ok:
+                    return json.dumps({"error": str(clean_name), "status": "error"})
+                updated_bill["bill_name"] = clean_name
+
+            if amount is not None:
+                ok, amt_val = validate_amount(amount)
+                if not ok:
+                    return json.dumps({"error": str(amt_val), "status": "error"})
+                updated_bill["amount"] = amt_val
+
+            if due_day is not None:
+                try:
+                    day_val = int(due_day)
+                except (ValueError, TypeError):
+                    return json.dumps({"error": f"due_day '{due_day}' must be an integer between 1 and 31.", "status": "error"})
+                if day_val < 1 or day_val > 31:
+                    return json.dumps({"error": f"due_day must be between 1 and 31, got {day_val}.", "status": "error"})
+                updated_bill["due_day"] = day_val
+
+            if category is not None:
+                ok, cat_val = validate_category(category, workspace=workspace_dir)
+                if not ok:
+                    return json.dumps({"error": str(cat_val), "status": "error"})
+                updated_bill["category"] = cat_val
+
+            preview = {"before": old_bill, "after": updated_bill}
+            risk = "low"
+            payload = {"action": "edit", "bill_name": str(bill_name).strip(), "changes": updated_bill}
+
+        else:  # cancel
+            old_bill = find_bill(bill_name)
+            if not old_bill:
+                return json.dumps({"error": f"Bill '{bill_name}' not found.", "status": "error"})
+
+            preview = {"before": old_bill, "after": None}
+            risk = "high"
+            payload = {"action": "cancel", "bill_name": str(bill_name).strip()}
+
+        proposal_id = f"prop_{uuid.uuid4().hex[:8]}"
+        proposal = store.create_proposal(
+            kind="bill_change",
+            payload=payload,
+            preview=preview,
+            risk=risk,
+            workspace=workspace_dir,
+            proposal_id=proposal_id,
+        )
+
+        _sync_legacy_proposals(proposal_id, proposal)
+
+        log_event("bill_change_proposed", {"proposal_id": proposal_id, "action": action_clean, "risk": risk})
+
+        return json.dumps({
+            "proposal_id": proposal_id,
+            "kind": "bill_change",
+            "action": action_clean,
+            "preview": preview,
+            "risk": risk,
+            "status": "pending_confirmation",
+            "message": f"Proposal {proposal_id} created to {action_clean} bill '{bill_name}'.",
+        })
+    except Exception as e:
+        return json.dumps({"error": str(e), "status": "error"})
+
+
+def revise_proposal(proposal_id: str, fields: dict | str) -> str:
+    """Revise an existing pending, unexpired proposal before approval (e.g. 'no, make it 40 instead').
+
+    Edits only a pending, unexpired proposal. Re-runs validation on all updated fields,
+    resets expires_at to 24 hours later, and does not apply anything. Returns the new preview.
+    """
+    try:
+        if isinstance(fields, str):
+            try:
+                fields = json.loads(fields)
+            except Exception:
+                # Try single key-value or number interpretation
+                pass
+
+        if not isinstance(fields, dict):
+            return json.dumps({"error": "fields must be a dictionary of field-value pairs.", "status": "error"})
+
+        p_path = _get_budgets_path()
+        workspace_dir = p_path.parent
+
+        proposals = store.read_proposals(workspace=workspace_dir)
+        p_id = str(proposal_id).strip()
+        if p_id not in proposals:
+            return json.dumps({"error": f"Proposal '{proposal_id}' not found.", "status": "error"})
+
+        proposal = proposals[p_id]
+        if proposal.get("status") != "pending_confirmation":
+            return json.dumps({
+                "error": f"Proposal '{proposal_id}' is not pending (status: {proposal.get('status')}).",
+                "status": "error",
+            })
+
+        expires_at = proposal.get("expires_at")
+        now = datetime.now()
+        if expires_at:
+            try:
+                exp_dt = datetime.fromisoformat(expires_at)
+                if now >= exp_dt:
+                    proposal["status"] = "expired"
+                    store.save_proposal(proposal, workspace=workspace_dir)
+                    _sync_legacy_proposals(p_id, proposal)
+                    return json.dumps({
+                        "error": f"Proposal '{proposal_id}' has expired and cannot be revised.",
+                        "status": "error",
+                    })
+            except Exception:
+                pass
+
+        kind = proposal.get("kind")
+        payload = proposal.get("payload", {})
+        preview = proposal.get("preview", {})
+
+        if kind == "budget_change":
+            amt = None
+            for k in ("new_limit", "amount", "limit"):
+                if k in fields and fields[k] is not None:
+                    amt = fields[k]
+                    break
+            if amt is not None:
+                ok, amt_val = validate_amount(amt)
+                if not ok:
+                    return json.dumps({"error": str(amt_val), "status": "error"})
+                action = proposal.get("action") or payload.get("action", "change")
+                if action == "add":
+                    if amt_val < 1.0 or amt_val > 10000.0:
+                        return json.dumps({
+                            "error": "New category budget limit must be between $1.00 and $10,000.00.",
+                            "status": "error",
+                        })
+                else:
+                    old_limit = float(proposal.get("old_limit") or payload.get("old_limit", 0.0))
+                    max_allowed = round(old_limit * 2.0, 2)
+                    if amt_val > max_allowed:
+                        return json.dumps({
+                            "status": "rejected",
+                            "error": f"Requested limit ${amt_val:.2f} exceeds twice the current limit (${old_limit:.2f}). Maximum allowed is ${max_allowed:.2f}.",
+                            "category": proposal.get("category"),
+                            "current_limit": old_limit,
+                            "maximum_allowed": max_allowed,
+                        })
+                proposal["new_limit"] = amt_val
+                payload["new_limit"] = amt_val
+                if isinstance(preview, dict) and "after" in preview:
+                    preview["after"] = amt_val
+
+        elif kind == "add_transactions":
+            items = payload.get("items", [])
+            for it in items:
+                for k, v in fields.items():
+                    if k == "amount":
+                        ok, val = validate_amount(v)
+                        if not ok: return json.dumps({"error": str(val), "status": "error"})
+                        it["amount"] = val
+                    elif k == "date":
+                        ok, val = validate_date(v, workspace=workspace_dir)
+                        if not ok: return json.dumps({"error": str(val), "status": "error"})
+                        it["date"] = val
+                        it["month"] = str(val)[:7]
+                    elif k == "category":
+                        ok, val = validate_category(v, workspace=workspace_dir)
+                        if not ok: return json.dumps({"error": str(val), "status": "error"})
+                        it["category"] = val
+                    elif k == "description":
+                        ok, val = validate_text(v)
+                        if not ok: return json.dumps({"error": str(val), "status": "error"})
+                        it["description"] = val
+                    elif k == "type":
+                        if str(v).lower() not in ("expense", "income"):
+                            return json.dumps({"error": f"Invalid type '{v}'. Must be expense or income.", "status": "error"})
+                        it["type"] = str(v).lower()
+            payload["items"] = items
+            if isinstance(preview, dict) and "after" in preview:
+                preview["after"] = items
+
+        elif kind == "update_transaction":
+            current_fields = payload.get("fields", {})
+            current_fields.update(fields)
+            for k, v in list(current_fields.items()):
+                if k == "amount":
+                    ok, val = validate_amount(v)
+                    if not ok: return json.dumps({"error": str(val), "status": "error"})
+                    current_fields[k] = val
+                elif k == "date":
+                    ok, val = validate_date(v, workspace=workspace_dir)
+                    if not ok: return json.dumps({"error": str(val), "status": "error"})
+                    current_fields[k] = val
+                elif k == "category":
+                    ok, val = validate_category(v, workspace=workspace_dir)
+                    if not ok: return json.dumps({"error": str(val), "status": "error"})
+                    current_fields[k] = val
+                elif k == "description":
+                    ok, val = validate_text(v)
+                    if not ok: return json.dumps({"error": str(val), "status": "error"})
+                    current_fields[k] = val
+            payload["fields"] = current_fields
+            if isinstance(preview, dict) and isinstance(preview.get("after"), dict):
+                preview["after"].update(current_fields)
+            # Re-evaluate risk
+            orig_row = preview.get("before", {}) if isinstance(preview, dict) else {}
+            orig_amt = float(orig_row.get("amount", 0.0)) if isinstance(orig_row, dict) else 0.0
+            new_amt = float(current_fields.get("amount", orig_amt))
+            proposal["risk"] = "high" if abs(new_amt - orig_amt) > 500 else "low"
+
+        elif kind == "bill_change":
+            bill_data = payload.get("bill", {}) if isinstance(payload.get("bill"), dict) else payload
+            for k, v in fields.items():
+                if k == "amount":
+                    ok, val = validate_amount(v)
+                    if not ok: return json.dumps({"error": str(val), "status": "error"})
+                    bill_data["amount"] = val
+                elif k == "category":
+                    ok, val = validate_category(v, workspace=workspace_dir)
+                    if not ok: return json.dumps({"error": str(val), "status": "error"})
+                    bill_data["category"] = val
+                elif k == "bill_name":
+                    ok, val = validate_text(v)
+                    if not ok: return json.dumps({"error": str(val), "status": "error"})
+                    bill_data["bill_name"] = val
+                elif k == "due_day":
+                    try:
+                        day = int(v)
+                        if day < 1 or day > 31:
+                            return json.dumps({"error": f"due_day must be between 1 and 31.", "status": "error"})
+                        bill_data["due_day"] = day
+                    except Exception:
+                        return json.dumps({"error": f"Invalid due_day '{v}'.", "status": "error"})
+            if isinstance(preview, dict) and isinstance(preview.get("after"), dict):
+                preview["after"].update(bill_data)
+
+        # Reset expires_at to 24 hours later
+        new_expires = (datetime.now() + timedelta(hours=24)).isoformat()
+        proposal["expires_at"] = new_expires
+        proposal["payload"] = payload
+        proposal["preview"] = preview
+
+        store.save_proposal(proposal, workspace=workspace_dir)
+        _sync_legacy_proposals(p_id, proposal)
+
+        log_event(
+            "proposal_revised",
+            {
+                "proposal_id": p_id,
+                "kind": kind,
+                "expires_at": new_expires,
+                "risk": proposal.get("risk", "low"),
+            },
+        )
+
+        return json.dumps({
+            "status": "pending_confirmation",
+            "proposal_id": p_id,
+            "preview": preview,
+            "risk": proposal.get("risk", "low"),
+            "expires_at": new_expires,
+            "message": f"Proposal {p_id} revised successfully.",
+        })
+    except Exception as e:
+        return json.dumps({"error": str(e), "status": "error"})
 
 
 def cashflow_projection(days_ahead: int = 30, today: str | None = None) -> str:
@@ -1162,20 +1977,155 @@ FIND_POSSIBLE_DUPLICATES_SCHEMA = {
 
 PROPOSE_BUDGET_CHANGE_SCHEMA = {
     "name": "propose_budget_change",
-    "description": "Proposes a change to a category spending limit. Does not apply the change; generates a pending proposal that requires user confirmation in the terminal. Arguments: category (string), new_limit (positive number). Result: JSON containing proposal_id, category, old_limit, and new_limit.",
+    "description": "Proposes a change to a budget category limit, creates a new category, or removes a category. Does not apply the change; generates a pending proposal that requires user confirmation in the terminal. Arguments: category (string), new_limit (optional number for add/update), action (optional string: 'update', 'add', 'remove'). Result: JSON containing proposal_id, category, old_limit, and new_limit.",
     "parameters": {
         "type": "object",
         "properties": {
             "category": {
                 "type": "string",
-                "description": "The budget category to update (e.g., 'Dining').",
+                "description": "The budget category name (e.g., 'Dining', or a new category name).",
             },
             "new_limit": {
                 "type": "number",
-                "description": "The proposed new monthly spending limit in USD (must be > 0).",
+                "description": "The proposed monthly spending limit in USD (must be between 1 and 10000 for new category, or > 0 for update).",
+            },
+            "action": {
+                "type": "string",
+                "description": "Action type: 'update' (default, changes existing category limit), 'add' (creates new category with limit between 1 and 10000), or 'remove' (removes category).",
+                "enum": ["update", "add", "remove"],
             },
         },
-        "required": ["category", "new_limit"],
+        "required": ["category"],
+    },
+}
+
+PROPOSE_ADD_TRANSACTIONS_SCHEMA = {
+    "name": "propose_add_transactions",
+    "description": "Proposes adding up to 10 new transactions. Validates date, description, amount, category, and type (expense or income). Checks for missing/ambiguous fields and duplicate charges. Does not write to data files; creates a pending proposal requiring user confirmation. Arguments: items (list of transaction objects).",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "description": "List of up to 10 transaction objects to propose.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "date": {
+                            "type": "string",
+                            "description": "Transaction date in YYYY-MM-DD ISO format.",
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": "Description of the transaction.",
+                        },
+                        "amount": {
+                            "type": "number",
+                            "description": "Transaction amount in USD (positive number, up to 2 decimal places).",
+                        },
+                        "category": {
+                            "type": "string",
+                            "description": "Transaction category (must exist in workspace categories).",
+                        },
+                        "type": {
+                            "type": "string",
+                            "description": "Transaction type: 'expense' or 'income'.",
+                            "enum": ["expense", "income"],
+                        },
+                    },
+                    "required": ["date", "description", "amount", "category", "type"],
+                },
+            },
+        },
+        "required": ["items"],
+    },
+}
+
+PROPOSE_UPDATE_TRANSACTION_SCHEMA = {
+    "name": "propose_update_transaction",
+    "description": "Proposes updating fields of an existing transaction (amount, category, date, description). Preview shows old and new values. Risk is low, or high if amount changes by >500. Does not write to data files; creates a pending proposal requiring user confirmation. Arguments: transaction_id (string), fields (object).",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "transaction_id": {
+                "type": "string",
+                "description": "The unique ID of the transaction to update.",
+            },
+            "fields": {
+                "type": "object",
+                "description": "Fields to update: may include amount, category, date, and description.",
+                "properties": {
+                    "amount": {
+                        "type": "number",
+                        "description": "Updated amount in USD.",
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "Updated category name.",
+                    },
+                    "date": {
+                        "type": "string",
+                        "description": "Updated date in YYYY-MM-DD format.",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Updated description text.",
+                    },
+                },
+            },
+        },
+        "required": ["transaction_id", "fields"],
+    },
+}
+
+PROPOSE_DELETE_TRANSACTION_SCHEMA = {
+    "name": "propose_delete_transaction",
+    "description": "Proposes deleting an existing transaction by ID. High-risk operation. Does not write to data files; creates a pending proposal requiring user confirmation. Arguments: transaction_id (string).",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "transaction_id": {
+                "type": "string",
+                "description": "The unique ID of the transaction to delete.",
+            },
+        },
+        "required": ["transaction_id"],
+    },
+}
+
+PROPOSE_BILL_CHANGE_SCHEMA = {
+    "name": "propose_bill_change",
+    "description": "Proposes adding, editing, or cancelling a recurring bill. Risk is low for add/edit, high for cancel. Does not write to data files; creates a pending proposal requiring user confirmation. Arguments: action ('add', 'edit', 'cancel'), bill_name (string), plus optional amount, due_day, category, new_bill_name.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "description": "Action to perform: 'add', 'edit', or 'cancel'.",
+                "enum": ["add", "edit", "cancel"],
+            },
+            "bill_name": {
+                "type": "string",
+                "description": "Name of the bill (for add, the new bill name; for edit/cancel, the existing bill name).",
+            },
+            "amount": {
+                "type": "number",
+                "description": "Monthly bill amount in USD (required for 'add', optional for 'edit').",
+            },
+            "due_day": {
+                "type": "integer",
+                "description": "Day of the month the bill is due (1-31; required for 'add', optional for 'edit').",
+            },
+            "category": {
+                "type": "string",
+                "description": "Category for the bill (required for 'add', optional for 'edit').",
+            },
+            "new_bill_name": {
+                "type": "string",
+                "description": "Optional new name for the bill when action is 'edit'.",
+            },
+        },
+        "required": ["action", "bill_name"],
     },
 }
 
@@ -1236,6 +2186,25 @@ GET_DATA_OVERVIEW_SCHEMA = {
     },
 }
 
+REVISE_PROPOSAL_SCHEMA = {
+    "name": "revise_proposal",
+    "description": "Revise an existing pending, unexpired proposal before approval (e.g. 'no, make it 40 instead'). Edits proposal fields, re-validates, and resets the 24-hour expiration time. Does not apply anything. Arguments: proposal_id (string), fields (object of key-value pairs).",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "proposal_id": {
+                "type": "string",
+                "description": "The unique ID of the pending proposal to revise.",
+            },
+            "fields": {
+                "type": "object",
+                "description": "Key-value pairs of fields to update on the proposal (e.g. {'amount': 40.0} or {'new_limit': 400.0}).",
+            },
+        },
+        "required": ["proposal_id", "fields"],
+    },
+}
+
 # Only schemas sent to the model
 TOOL_SCHEMAS = [
     GET_MONTHLY_SUMMARY_SCHEMA,
@@ -1248,6 +2217,11 @@ TOOL_SCHEMAS = [
     CASHFLOW_PROJECTION_SCHEMA,
     DETECT_SPENDING_SPIKES_SCHEMA,
     SAVINGS_RECOMMENDATIONS_SCHEMA,
+    PROPOSE_ADD_TRANSACTIONS_SCHEMA,
+    PROPOSE_UPDATE_TRANSACTION_SCHEMA,
+    PROPOSE_DELETE_TRANSACTION_SCHEMA,
+    PROPOSE_BILL_CHANGE_SCHEMA,
+    REVISE_PROPOSAL_SCHEMA,
 ]
 
 TOOLS_BY_NAME = {
@@ -1261,5 +2235,11 @@ TOOLS_BY_NAME = {
     "cashflow_projection": cashflow_projection,
     "detect_spending_spikes": detect_spending_spikes,
     "savings_recommendations": savings_recommendations,
+    "propose_add_transactions": propose_add_transactions,
+    "propose_update_transaction": propose_update_transaction,
+    "propose_delete_transaction": propose_delete_transaction,
+    "propose_bill_change": propose_bill_change,
+    "revise_proposal": revise_proposal,
 }
+
 

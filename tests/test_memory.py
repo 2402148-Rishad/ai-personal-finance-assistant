@@ -190,5 +190,6 @@ def test_agent_result_status_step_limit(monkeypatch):
     result = run_agent("Loop indefinitely question", history=[])
 
     assert result.status == "step_limit"
-    assert result.answer == "Sorry, that request needed too many steps. Please ask a simpler question."
-    assert len(result.tool_calls) == 5  # MAX_AGENT_STEPS
+    assert "spending_by_category" in result.answer
+    assert "Remaining work" in result.answer or "remaining" in result.answer.lower()
+    assert len(result.tool_calls) == 8  # MAX_AGENT_STEPS

@@ -259,11 +259,17 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
 
         # 2.7) step_limit_reached: log when MAX_AGENT_STEPS is hit
         log_event("step_limit_reached", {"max_steps": MAX_AGENT_STEPS})
-        fallback = "Sorry, that request needed too many steps. Please ask a simpler question."
-        log_event("final_answer", {"answer": fallback})
+        completed_names = [tc["name"] for tc in all_tool_calls]
+        completed_str = ", ".join(completed_names) if completed_names else "none"
+        step_limit_answer = (
+            f"Step limit reached after {MAX_AGENT_STEPS} steps. "
+            f"Completed tool calls: {completed_str}. "
+            f"Remaining work could not be finished within the step limit. Please ask a simpler question."
+        )
+        log_event("final_answer", {"answer": step_limit_answer})
         convo_history = trim_history(convo_history, max_turns=10)
         return AgentResult(
-            answer=fallback,
+            answer=step_limit_answer,
             tool_calls=all_tool_calls,
             history=convo_history,
             status="step_limit",

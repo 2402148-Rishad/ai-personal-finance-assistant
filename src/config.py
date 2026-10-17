@@ -31,7 +31,7 @@ def get_api_key() -> str:
 
 # Model & execution configuration
 MODEL = "gemini-3.5-flash-lite"
-MAX_AGENT_STEPS = 5
+MAX_AGENT_STEPS = 8
 CURRENCY = "USD"
 
 # Simulated sandbox date, because the demo data ends in August 2026

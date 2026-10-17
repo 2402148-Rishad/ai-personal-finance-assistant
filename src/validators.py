@@ -2,10 +2,13 @@
 
 from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+import json
 import math
 import os
+from pathlib import Path
 import re
 from typing import Any, Collection
+import pandas as pd
 
 try:
     import src.config as config
@@ -21,8 +24,6 @@ except ImportError:
     try:
         from tools import sanitize_description
     except ImportError:
-        import pandas as pd
-
         def sanitize_description(desc: Any) -> str:
             """Fallback sanitizer if src.tools cannot be imported."""
             if desc is None or (isinstance(desc, float) and pd.isna(desc)):
@@ -32,20 +33,102 @@ except ImportError:
             cleaned = re.sub(r"\s+", " ", cleaned).strip()
             return cleaned[:80]
 
+try:
+    from src.store import get_sandbox_today
+except ImportError:
+    try:
+        from store import get_sandbox_today
+    except ImportError:
+        def get_sandbox_today(workspace: Any = None) -> str:
+            return "2026-08-31"
 
-# Canonical categories recognized across the application
-KNOWN_CATEGORIES: set[str] = {
-    "Groceries",
-    "Dining",
-    "Transport",
-    "Utilities",
-    "Subscriptions",
-    "Rent",
-    "Shopping",
-    "Health",
-    "Insurance",
-    "Other",
-}
+
+def get_workspace_categories(workspace: Any = None) -> set[str]:
+    """Return the set of categories dynamically resolved from the workspace:
+    budgets.json keys plus expense categories found in transactions.
+    """
+    categories: set[str] = set()
+    target_dir: Path | None = None
+    if workspace is not None:
+        target_dir = Path(workspace).resolve()
+    else:
+        try:
+            from src.store import get_data_dir
+            target_dir = get_data_dir()
+        except Exception:
+            try:
+                from store import get_data_dir
+                target_dir = get_data_dir()
+            except Exception:
+                pass
+
+    # 1. budgets.json keys
+    budgets_obj = None
+    if target_dir:
+        b_path = target_dir / "budgets.json"
+        if b_path.exists():
+            try:
+                with open(b_path, "r", encoding="utf-8") as f:
+                    budgets_obj = json.load(f)
+            except Exception:
+                pass
+
+    if budgets_obj is None:
+        try:
+            from src.store import SEED_DATA_DIR
+            b_path = SEED_DATA_DIR / "budgets.json"
+            if b_path.exists():
+                with open(b_path, "r", encoding="utf-8") as f:
+                    budgets_obj = json.load(f)
+        except Exception:
+            pass
+
+    if isinstance(budgets_obj, dict):
+        for k in budgets_obj.keys():
+            k_str = str(k).strip()
+            if k_str:
+                categories.add(k_str)
+
+    # 2. Expense categories found in transactions.csv
+    tx_df = None
+    if target_dir:
+        tx_path = target_dir / "transactions.csv"
+        if tx_path.exists():
+            try:
+                tx_df = pd.read_csv(tx_path)
+            except Exception:
+                pass
+
+    if tx_df is None:
+        try:
+            from src.store import SEED_DATA_DIR
+            tx_path = SEED_DATA_DIR / "transactions.csv"
+            if tx_path.exists():
+                tx_df = pd.read_csv(tx_path)
+        except Exception:
+            pass
+
+    if tx_df is not None and not tx_df.empty and "category" in tx_df.columns:
+        if "type" in tx_df.columns:
+            expense_rows = tx_df[tx_df["type"].astype(str).str.lower() == "expense"]
+            for cat in expense_rows["category"].dropna().unique():
+                c_str = str(cat).strip()
+                if c_str:
+                    categories.add(c_str)
+        else:
+            for cat in tx_df["category"].dropna().unique():
+                c_str = str(cat).strip()
+                if c_str:
+                    categories.add(c_str)
+
+    return categories
+
+
+def __getattr__(name: str) -> Any:
+    """Dynamically resolve KNOWN_CATEGORIES to categories present in workspace."""
+    if name == "KNOWN_CATEGORIES":
+        return get_workspace_categories()
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 
 def validate_amount(amount: Any) -> tuple[bool, float | str]:
@@ -96,11 +179,15 @@ def validate_amount(amount: Any) -> tuple[bool, float | str]:
     return True, round(float(dec), 2)
 
 
-def validate_date(date_val: Any, sandbox_date: str | None = None) -> tuple[bool, str]:
+def validate_date(
+    date_val: Any,
+    sandbox_date: str | None = None,
+    workspace: Any = None,
+) -> tuple[bool, str]:
     """Validate transaction/bill date:
     - ISO format (YYYY-MM-DD)
     - not before 2000-01-01
-    - not after the sandbox date (defaults to AS_OF_DATE / FINANCE_AS_OF_DATE, e.g. 2026-08-31)
+    - not after the sandbox date (defaults to get_sandbox_today(workspace))
 
     Returns (ok, cleaned_value_or_error_message).
     """
@@ -123,11 +210,7 @@ def validate_date(date_val: Any, sandbox_date: str | None = None) -> tuple[bool,
     if d < min_date:
         return False, f"Date '{date_str}' cannot be before 2000-01-01."
 
-    effective_sandbox = (
-        sandbox_date
-        or os.getenv("FINANCE_AS_OF_DATE")
-        or (getattr(config, "AS_OF_DATE", "2026-08-31") if config else "2026-08-31")
-    )
+    effective_sandbox = sandbox_date or get_sandbox_today(workspace)
     try:
         max_date = date.fromisoformat(str(effective_sandbox).strip())
     except ValueError:
@@ -142,9 +225,10 @@ def validate_date(date_val: Any, sandbox_date: str | None = None) -> tuple[bool,
 def validate_category(
     category: Any,
     known_categories: Collection[str] | None = None,
+    workspace: Any = None,
 ) -> tuple[bool, str]:
     """Validate spending/budget category:
-    - must exist in the known categories
+    - must exist in the workspace categories (budgets.json keys + transactions expense categories)
 
     Returns (ok, cleaned_value_or_error_message).
     """
@@ -155,7 +239,17 @@ def validate_category(
     if not cat_str:
         return False, "Category cannot be empty."
 
-    cats = set(known_categories) if known_categories is not None else KNOWN_CATEGORIES
+    cats = set(known_categories) if known_categories is not None else get_workspace_categories(workspace)
+
+    if cat_str in cats:
+        return True, cat_str
+
+    # Case-insensitive match fallback
+    for known in cats:
+        if known.lower() == cat_str.lower():
+            return True, known
+
+    return False, f"Category '{category}' is invalid. Must be one of: {sorted(cats)}."
 
     if cat_str in cats:
         return True, cat_str

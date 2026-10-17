@@ -2,7 +2,7 @@
 managing isolated session workspaces, and maintaining audit logs.
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import json
 import os
 from pathlib import Path
@@ -12,6 +12,7 @@ import stat
 import tempfile
 import threading
 from typing import Any
+import uuid
 import pandas as pd
 
 try:
@@ -137,9 +138,14 @@ def ensure_transaction_ids(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def read_csv(name: str | Path, data_dir: Path | str | None = None, **kwargs) -> pd.DataFrame:
+def read_csv(
+    name: str | Path,
+    data_dir: Path | str | None = None,
+    workspace: Path | str | None = None,
+    **kwargs,
+) -> pd.DataFrame:
     """Read a CSV file from the active data directory."""
-    path = resolve_path(name, data_dir=data_dir)
+    path = resolve_path(name, data_dir=workspace or data_dir)
     df = pd.read_csv(path, **kwargs)
     name_str = Path(name).name
     if name_str == "transactions.csv":
@@ -151,6 +157,7 @@ def write_csv_atomic(
     name: str | Path,
     df: pd.DataFrame,
     data_dir: Path | str | None = None,
+    workspace: Path | str | None = None,
     **kwargs,
 ) -> Path:
     """Write DataFrame atomically to a CSV file in the active data directory.
@@ -158,7 +165,7 @@ def write_csv_atomic(
     Writes to a temporary file in the same directory, then renames via os.replace.
     Guarded with threading.RLock (single-process safe only).
     """
-    path = resolve_path(name, data_dir=data_dir)
+    path = resolve_path(name, data_dir=workspace or data_dir)
     target_dir = path.parent
     _check_write_allowed(target_dir)
 
@@ -194,9 +201,13 @@ def write_csv_atomic(
             raise
 
 
-def read_json(name: str | Path, data_dir: Path | str | None = None) -> Any:
+def read_json(
+    name: str | Path,
+    data_dir: Path | str | None = None,
+    workspace: Path | str | None = None,
+) -> Any:
     """Read a JSON file from the active data directory."""
-    path = resolve_path(name, data_dir=data_dir)
+    path = resolve_path(name, data_dir=workspace or data_dir)
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -205,6 +216,7 @@ def write_json_atomic(
     name: str | Path,
     obj: Any,
     data_dir: Path | str | None = None,
+    workspace: Path | str | None = None,
     **kwargs,
 ) -> Path:
     """Write an object atomically to a JSON file in the active data directory.
@@ -212,7 +224,7 @@ def write_json_atomic(
     Writes to a temporary file in the same directory, then renames via os.replace.
     Guarded with threading.RLock (single-process safe only).
     """
-    path = resolve_path(name, data_dir=data_dir)
+    path = resolve_path(name, data_dir=workspace or data_dir)
     target_dir = path.parent
     _check_write_allowed(target_dir)
 
@@ -309,10 +321,12 @@ def append_audit(
     after: Any,
     source: str = "human",
     workspace: Path | str | None = None,
+    undo_token: str | None = None,
+    **kwargs,
 ) -> Path:
     """Append one JSON line to <workspace>/audit.jsonl with timestamp, action,
-    source ("human" or "model"), before and after. Truncates strings in before
-    and after to 500 characters.
+    source ("human" or "model"), before, after, and optional undo_token.
+    Truncates strings in before and after to 500 characters.
     """
     if source not in ("human", "model"):
         raise ValueError(f"Invalid source '{source}'. Must be 'human' or 'model'.")
@@ -330,6 +344,11 @@ def append_audit(
         "before": _truncate_strings(before, 500),
         "after": _truncate_strings(after, 500),
     }
+    if undo_token is not None:
+        record["undo_token"] = str(undo_token)
+    for k, v in kwargs.items():
+        if k not in record:
+            record[k] = v
 
     line = json.dumps(record) + "\n"
 
@@ -449,4 +468,72 @@ def set_sandbox_today(value: Any, workspace: Path | str | None = None) -> str:
     settings["sandbox_today"] = d.isoformat()
     write_json_atomic("settings.json", settings, data_dir=target_dir)
     return d.isoformat()
+
+
+def read_proposals(workspace: Path | str | None = None) -> dict[str, dict]:
+    """Read pending proposals from <workspace>/proposals.json."""
+    target_dir = Path(workspace).resolve() if workspace is not None else get_data_dir()
+    path = target_dir / "proposals.json"
+    if not path.exists():
+        return {}
+    try:
+        data = read_json("proposals.json", data_dir=target_dir)
+        if isinstance(data, dict):
+            return data
+        elif isinstance(data, list):
+            return {
+                str(p.get("id") or p.get("proposal_id")): p
+                for p in data
+                if isinstance(p, dict) and (p.get("id") or p.get("proposal_id"))
+            }
+        return {}
+    except Exception:
+        return {}
+
+
+def save_proposal(proposal: dict, workspace: Path | str | None = None) -> Path:
+    """Save or update a proposal in <workspace>/proposals.json using write_json_atomic."""
+    target_dir = Path(workspace).resolve() if workspace is not None else get_data_dir()
+    proposals = read_proposals(workspace=target_dir)
+    p_id = proposal.get("id") or proposal.get("proposal_id")
+    if not p_id:
+        raise ValueError("Proposal must have an 'id' or 'proposal_id'.")
+    proposals[str(p_id)] = proposal
+    return write_json_atomic("proposals.json", proposals, data_dir=target_dir)
+
+
+def create_proposal(
+    kind: str,
+    payload: dict,
+    preview: dict,
+    risk: str = "low",
+    workspace: Path | str | None = None,
+    proposal_id: str | None = None,
+    **kwargs,
+) -> dict:
+    """Create, persist, and return a pending proposal in <workspace>/proposals.json.
+
+    Each proposal has id, kind, payload, preview (before and after), risk ("low" or "high"),
+    created_at, and expires_at (24 hours later).
+    """
+    p_id = proposal_id or f"prop_{uuid.uuid4().hex[:8]}"
+    created_dt = datetime.now()
+    expires_dt = created_dt + timedelta(hours=24)
+
+    proposal = {
+        "id": p_id,
+        "proposal_id": p_id,
+        "kind": kind,
+        "payload": payload,
+        "preview": preview,
+        "risk": "high" if risk == "high" else "low",
+        "created_at": created_dt.isoformat(),
+        "expires_at": expires_dt.isoformat(),
+        "status": "pending_confirmation",
+    }
+    proposal.update(kwargs)
+
+    save_proposal(proposal, workspace=workspace)
+    return proposal
+
 
