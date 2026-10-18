@@ -347,3 +347,137 @@ def test_app_ui_plan_goals_card():
         markdown_texts = [m.value for m in at.markdown]
         assert any("Goals" in val for val in markdown_texts)
 
+
+def test_undo_goal_change_restores_previous_goal(clean_workspace):
+    """Undo of a goal change restores the previous goal state in goals.json."""
+    ws = clean_workspace
+    store.set_sandbox_today("2026-08-31", workspace=ws)
+
+    # 1. Update goal undo: Seed goal, update it, approve, then undo
+    g1 = store.add_goal(
+        {
+            "name": "House Downpayment",
+            "target_amount": 20000.0,
+            "target_date": "2027-12-31",
+            "saved_so_far": 5000.0,
+        },
+        workspace=ws,
+    )
+    g_id = g1["id"]
+
+    prop_raw = tools.propose_goal(
+        action="update",
+        goal_id=g_id,
+        saved_so_far=7500.0,
+        workspace=ws,
+    )
+    p_id = json.loads(prop_raw)["proposal_id"]
+    app_res = approvals.approve(p_id, "yes", workspace=ws)
+    assert app_res["status"] == "applied"
+    assert store.get_goals(workspace=ws)[0]["saved_so_far"] == 7500.0
+
+    # Undo the update
+    undo_res = approvals.undo(workspace=ws)
+    assert undo_res["status"] == "undone"
+    assert undo_res["reverted_action"] == "approve_goal_change"
+
+    restored_goals = store.get_goals(workspace=ws)
+    assert len(restored_goals) == 1
+    assert restored_goals[0]["id"] == g_id
+    assert restored_goals[0]["saved_so_far"] == 5000.0
+
+    # 2. Add goal undo: Propose add, approve, then undo -> goal removed
+    prop_add_raw = tools.propose_goal(
+        action="add",
+        name="Ski Trip",
+        target_amount=1200.0,
+        target_date="2027-02-28",
+        saved_so_far=200.0,
+        workspace=ws,
+    )
+    add_pid = json.loads(prop_add_raw)["proposal_id"]
+    approvals.approve(add_pid, "yes", workspace=ws)
+    assert len(store.get_goals(workspace=ws)) == 2
+
+    undo_add_res = approvals.undo(workspace=ws)
+    assert undo_add_res["status"] == "undone"
+    goals_after_undo_add = store.get_goals(workspace=ws)
+    assert len(goals_after_undo_add) == 1
+    assert goals_after_undo_add[0]["name"] == "House Downpayment"
+
+    # 3. Delete goal undo: Propose delete, approve CONFIRM, then undo -> goal restored
+    prop_del_raw = tools.propose_goal(action="delete", goal_id=g_id, workspace=ws)
+    del_pid = json.loads(prop_del_raw)["proposal_id"]
+    approvals.approve(del_pid, "CONFIRM", workspace=ws)
+    assert len(store.get_goals(workspace=ws)) == 0
+
+    undo_del_res = approvals.undo(workspace=ws)
+    assert undo_del_res["status"] == "undone"
+    goals_after_undo_del = store.get_goals(workspace=ws)
+    assert len(goals_after_undo_del) == 1
+    assert goals_after_undo_del[0]["id"] == g_id
+    assert goals_after_undo_del[0]["name"] == "House Downpayment"
+
+
+def test_undo_of_an_undo_is_refused(clean_workspace):
+    """Undo of an undo is refused by approvals.undo()."""
+    ws = clean_workspace
+    store.set_sandbox_today("2026-08-31", workspace=ws)
+
+    # Add goal and propose update
+    g = store.add_goal(
+        {
+            "name": "New Bike",
+            "target_amount": 800.0,
+            "target_date": "2026-10-31",
+            "saved_so_far": 200.0,
+        },
+        workspace=ws,
+    )
+    prop_raw = tools.propose_goal(action="update", goal_id=g["id"], saved_so_far=350.0, workspace=ws)
+    p_id = json.loads(prop_raw)["proposal_id"]
+    approvals.approve(p_id, "yes", workspace=ws)
+
+    # First undo succeeds
+    first_undo = approvals.undo(workspace=ws)
+    assert first_undo["status"] == "undone"
+
+    # Second undo immediately after is refused (undo of an undo is refused)
+    second_undo = approvals.undo(workspace=ws)
+    assert second_undo["status"] == "refused"
+    assert "Undo refused" in second_undo["message"]
+
+
+def test_deleting_goal_without_confirm_is_rejected(clean_workspace):
+    """Deleting a goal without CONFIRM is rejected and does not delete the goal."""
+    ws = clean_workspace
+    g = store.add_goal(
+        {
+            "name": "College Savings",
+            "target_amount": 10000.0,
+            "target_date": "2030-05-31",
+            "saved_so_far": 1500.0,
+        },
+        workspace=ws,
+    )
+    g_id = g["id"]
+    assert len(store.get_goals(workspace=ws)) == 1
+
+    # 1. Propose delete, reject explicitly via approvals.reject
+    del_prop1_raw = tools.propose_goal(action="delete", goal_id=g_id, workspace=ws)
+    p_id1 = json.loads(del_prop1_raw)["proposal_id"]
+    rej_res = approvals.reject(p_id1, workspace=ws)
+    assert rej_res["status"] == "rejected"
+    assert len(store.get_goals(workspace=ws)) == 1
+
+    # 2. Propose delete, attempt approval with invalid answer ('yes', '', 'CONFIRM plz') -> rejected / error
+    del_prop2_raw = tools.propose_goal(action="delete", goal_id=g_id, workspace=ws)
+    p_id2 = json.loads(del_prop2_raw)["proposal_id"]
+
+    for bad_answer in ["yes", "", "confirm", "NO", "CONFIRM PLEASE"]:
+        err_res = approvals.approve(p_id2, bad_answer, workspace=ws)
+        assert err_res["status"] == "error"
+        assert "CONFIRM" in err_res["error"]
+        assert len(store.get_goals(workspace=ws)) == 1
+
+

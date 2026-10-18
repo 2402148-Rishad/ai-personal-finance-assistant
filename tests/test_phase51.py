@@ -163,16 +163,17 @@ def test_pending_proposal_expiring_within_2_hours(clean_workspace):
     ws = clean_workspace
 
     now = datetime.now()
-    exp_soon = (now + timedelta(minutes=45)).isoformat()
-    exp_later = (now + timedelta(hours=6)).isoformat()
+    # Test near-boundary values: 1h 55m (< 2 hours, fires) vs 2h 5m (> 2 hours, does not fire)
+    exp_boundary_under = (now + timedelta(hours=1, minutes=55)).isoformat()
+    exp_boundary_over = (now + timedelta(hours=2, minutes=5)).isoformat()
 
-    # Proposal expiring soon (in 45 min)
+    # Proposal expiring in 1 hour 55 minutes (under 2 hours)
     prop1 = store.create_proposal(
         kind="budget_change",
         payload={"category": "Dining", "new_limit": 400.0},
         preview={"before": 300.0, "after": 400.0},
         workspace=ws,
-        expires_at=exp_soon,
+        expires_at=exp_boundary_under,
     )
 
     alerts = get_alerts(workspace=ws)
@@ -182,8 +183,8 @@ def test_pending_proposal_expiring_within_2_hours(clean_workspace):
     assert prop_alerts[0]["action"] == "Open Inbox"
     assert "expires in less than 2 hours" in prop_alerts[0]["text"]
 
-    # When updated to expire later (6 hours)
-    prop1["expires_at"] = exp_later
+    # When updated to expire in 2 hours 5 minutes (over 2 hours)
+    prop1["expires_at"] = exp_boundary_over
     store.save_proposal(prop1, workspace=ws)
 
     alerts2 = get_alerts(workspace=ws)
