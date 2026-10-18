@@ -86,6 +86,10 @@ def build_source_line(tool_calls: list[dict]) -> str:
             sources.append("bills.csv")
         elif name == "revise_proposal":
             sources.append("pending_proposals.json")
+        elif name == "get_alerts":
+            sources.append("transactions.csv")
+            sources.append("bills.csv")
+            sources.append("budgets.json")
         elif name:
             sources.append(name)
 

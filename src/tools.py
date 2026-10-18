@@ -2600,6 +2600,30 @@ REVISE_PROPOSAL_SCHEMA = {
     },
 }
 
+def get_alerts(workspace: Path | str | None = None) -> str:
+    """Fetch current financial alerts, warnings, and attention items (most urgent first)."""
+    try:
+        from src.alerts import get_alerts as _fetch_alerts
+        alerts = _fetch_alerts(workspace=workspace)
+        most_urgent = alerts[0] if alerts else None
+        return json.dumps({
+            "alerts": alerts,
+            "count": len(alerts),
+            "most_urgent": most_urgent,
+        })
+    except Exception as e:
+        return json.dumps({"error": str(e), "alerts": []})
+
+
+GET_ALERTS_SCHEMA = {
+    "name": "get_alerts",
+    "description": "Fetch current financial alerts, warnings, and items needing attention (most urgent first).",
+    "parameters": {
+        "type": "object",
+        "properties": {},
+    },
+}
+
 # Only schemas sent to the model
 TOOL_SCHEMAS = [
     GET_MONTHLY_SUMMARY_SCHEMA,
@@ -2617,6 +2641,7 @@ TOOL_SCHEMAS = [
     PROPOSE_DELETE_TRANSACTION_SCHEMA,
     PROPOSE_BILL_CHANGE_SCHEMA,
     REVISE_PROPOSAL_SCHEMA,
+    GET_ALERTS_SCHEMA,
 ]
 
 TOOLS_BY_NAME = {
@@ -2635,6 +2660,7 @@ TOOLS_BY_NAME = {
     "propose_delete_transaction": propose_delete_transaction,
     "propose_bill_change": propose_bill_change,
     "revise_proposal": revise_proposal,
+    "get_alerts": get_alerts,
 }
 
 

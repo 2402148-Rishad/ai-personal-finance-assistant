@@ -9,7 +9,7 @@ import streamlit as st
 
 from src.agent import run_agent, build_source_line
 from src.approvals import list_pending, approve, reject, undo
-from src.banner import get_do_this_next_banner
+from src.banner import get_do_this_next_banner, get_banner
 from src.config import AS_OF_DATE
 import src.store as store
 from src.store import (
@@ -227,7 +227,11 @@ with left_col:
         st.rerun()
 
     # "Do this next" banner above the chat
-    banner_text = get_do_this_next_banner(workspace=session_ws)
+    banner_info = get_banner(workspace=session_ws)
+    banner_text = banner_info["text"]
+    banner_action = banner_info.get("action")
+    banner_level = banner_info.get("level", "info")
+
     st.markdown("##### Do this next")
     has_pending = False
     try:
@@ -235,18 +239,42 @@ with left_col:
     except Exception:
         pass
 
-    def _open_inbox_cb():
-        st.session_state["active_view"] = "Inbox"
-        st.session_state["active_tab"] = "Inbox"
+    def _open_action_cb(action_label: str):
+        if action_label == "Open Inbox":
+            st.session_state["active_view"] = "Inbox"
+            st.session_state["active_tab"] = "Inbox"
+        elif action_label == "Open Plan":
+            st.session_state["active_view"] = "Plan"
+            st.session_state["active_tab"] = "Plan"
+        elif action_label == "Open Ledger":
+            st.session_state["active_view"] = "Ledger"
+            st.session_state["active_tab"] = "Ledger"
 
-    if has_pending:
+    def _render_banner_msg(msg: str, lvl: str):
+        if lvl == "urgent":
+            st.error(msg)
+        elif lvl == "warning":
+            st.warning(msg)
+        else:
+            st.info(msg)
+
+    if banner_action:
         b_c1, b_c2 = st.columns([3, 1], vertical_alignment="center")
         with b_c1:
-            st.info(banner_text)
+            _render_banner_msg(banner_text, banner_level)
         with b_c2:
-            st.button("Open Inbox", key="open_inbox_banner_btn", on_click=_open_inbox_cb)
+            st.button(banner_action, key="banner_action_btn", on_click=lambda a=banner_action: _open_action_cb(a))
+            if has_pending and banner_action != "Open Inbox":
+                st.button("Open Inbox", key="open_inbox_banner_btn", on_click=lambda: _open_action_cb("Open Inbox"))
     else:
-        st.info(banner_text)
+        if has_pending:
+            b_c1, b_c2 = st.columns([3, 1], vertical_alignment="center")
+            with b_c1:
+                _render_banner_msg(banner_text, banner_level)
+            with b_c2:
+                st.button("Open Inbox", key="open_inbox_banner_btn", on_click=lambda: _open_action_cb("Open Inbox"))
+        else:
+            _render_banner_msg(banner_text, banner_level)
 
     chat_error_placeholder = st.empty()
 

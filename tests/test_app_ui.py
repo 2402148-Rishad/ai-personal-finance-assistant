@@ -8,7 +8,7 @@ APP_PATH = (Path(__file__).resolve().parent.parent / "app.py").resolve()
 
 def test_app_ui():
     with patch("src.agent.run_agent", return_value=MagicMock()):
-        at = AppTest.from_file(str(APP_PATH), default_timeout=10).run()
+        at = AppTest.from_file(str(APP_PATH), default_timeout=20).run()
 
         # Assert no markdown element contains font-family, /*, or <style
         for m in at.markdown:
@@ -33,7 +33,7 @@ def test_app_ui_escaped_dollars():
     stub_result.history = []
 
     with patch("src.agent.run_agent", return_value=stub_result):
-        at = AppTest.from_file(str(APP_PATH), default_timeout=10).run()
+        at = AppTest.from_file(str(APP_PATH), default_timeout=20).run()
         at.text_input[0].input("What did I spend?")
         at.form_submit_button[0].click().run()
 

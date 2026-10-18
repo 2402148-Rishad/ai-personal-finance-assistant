@@ -24,6 +24,7 @@ TOOL_TIERS = {
     "detect_spending_spikes": Tier.READ,
     "savings_recommendations": Tier.READ,
     "get_data_overview": Tier.READ,
+    "get_alerts": Tier.READ,
 
     # Proposal tools
     "propose_budget_change": Tier.PROPOSE,

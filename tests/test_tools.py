@@ -207,8 +207,8 @@ class TestFinancialTools:
 
     def test_tool_schemas(self):
         """Verify that all JSON schemas are properly formatted and registered."""
-        assert len(TOOL_SCHEMAS) == 15
-        assert len(TOOLS_BY_NAME) == 15
+        assert len(TOOL_SCHEMAS) == 16
+        assert len(TOOLS_BY_NAME) == 16
         assert "apply_budget_change" not in TOOLS_BY_NAME
 
         for schema in TOOL_SCHEMAS:
