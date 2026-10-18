@@ -180,7 +180,7 @@ def test_out_of_scope_pay_rent_never_calls_model(monkeypatch):
         "What is my bank balance right now?",
     ]
 
-    expected_refusal = "I can't move money or connect to your bank. I can show your simulated sandbox balance and bills."
+    expected_refusal = "I cannot pay or move money, and I cannot connect to your bank. I can show your simulated sandbox balance and bills."
 
     for q in queries:
         res = run_agent(q)

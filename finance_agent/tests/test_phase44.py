@@ -220,7 +220,7 @@ def test_out_of_scope_pay_rent_no_source_line():
     assert result.status == "ok"
     assert len(result.tool_calls) == 0
     assert "Source:" not in result.answer
-    assert "I can't move money" in result.answer
+    assert "I cannot pay or move money" in result.answer
 
 
 def test_out_of_scope_patterns_refusal():
@@ -228,12 +228,12 @@ def test_out_of_scope_patterns_refusal():
     res1 = run_agent("Pay my rent")
     assert res1.status == "ok"
     assert len(res1.tool_calls) == 0
-    assert "I can't move money or connect to your bank" in res1.answer
+    assert "I cannot pay or move money, and I cannot connect to your bank" in res1.answer
 
     res2 = run_agent("Send money to Sam")
     assert res2.status == "ok"
     assert len(res2.tool_calls) == 0
-    assert "I can't move money or connect to your bank" in res2.answer
+    assert "I cannot pay or move money, and I cannot connect to your bank" in res2.answer
 
 
 def test_out_of_scope_word_boundaries_reach_model(monkeypatch):
@@ -255,22 +255,22 @@ def test_out_of_scope_word_boundaries_reach_model(monkeypatch):
 
     # 1. "When is my paycheck?"
     res_paycheck = run_agent("When is my paycheck?")
-    assert "I can't move money" not in res_paycheck.answer
+    assert "I cannot pay or move money" not in res_paycheck.answer
     assert "Answer from model." in res_paycheck.answer
 
     # 2. "What's my payment history?"
     res_payment = run_agent("What's my payment history?")
-    assert "I can't move money" not in res_payment.answer
+    assert "I cannot pay or move money" not in res_payment.answer
     assert "Answer from model." in res_payment.answer
 
     # 3. "When is payday?"
     res_payday = run_agent("When is payday?")
-    assert "I can't move money" not in res_payday.answer
+    assert "I cannot pay or move money" not in res_payday.answer
     assert "Answer from model." in res_payday.answer
 
     # 4. "What about my loan repayment?"
     res_repayment = run_agent("What about my loan repayment?")
-    assert "I can't move money" not in res_repayment.answer
+    assert "I cannot pay or move money" not in res_repayment.answer
     assert "Answer from model." in res_repayment.answer
 
     assert len(received_questions) >= 4

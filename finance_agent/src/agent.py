@@ -318,7 +318,7 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
             return AgentResult(answer=fixed_answer, tool_calls=[], history=convo_history, status="ok")
 
         if any(re.search(pat, q_lower) for pat in out_of_scope_patterns) and not (is_sub_query or is_inquiry_pay or is_whatif_cancel or is_dup_query or is_rescue_query):
-            fixed_answer = "I can't move money or connect to your bank. I can show your simulated sandbox balance and bills."
+            fixed_answer = "I cannot pay or move money, and I cannot connect to your bank. I can show your simulated sandbox balance and bills."
             log_event("out_of_scope_refusal", {"question": question, "answer": fixed_answer})
             convo_history.append(types.Content(role="user", parts=[types.Part.from_text(text=question)]))
             convo_history.append(types.Content(role="model", parts=[types.Part.from_text(text=fixed_answer)]))

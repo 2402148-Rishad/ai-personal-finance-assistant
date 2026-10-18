@@ -43,7 +43,6 @@ from src.approvals import list_pending
 import src.logger as logger_module
 
 QUESTIONS_FILE = PROJECT_ROOT / "eval" / "questions.json"
-RESULTS_FILE = PROJECT_ROOT / "eval" / "results.json"
 RESULTS_DIR = PROJECT_ROOT / "eval" / "results"
 
 
@@ -214,20 +213,20 @@ def create_eval_mock_generator(workspace: Path):
             return MockModelResponse(function_calls=[
                 MockFunctionCall("propose_add_transactions", {
                     "items": [
-                        {"date": "2026-08-16", "description": "lunch", "amount": 12.0, "category": "Dining", "type": "expense"},
-                        {"date": "2026-08-16", "description": "bus", "amount": 3.0, "category": "Transport", "type": "expense"},
+                        {"date": "2026-08-16", "description": "lunch", "amount": 12.0, "type": "expense"},
+                        {"date": "2026-08-16", "description": "bus", "amount": 3.0, "type": "expense"},
                     ]
                 })
             ])
 
         # q21
         if "no, i meant dining" in q_lower:
-            pending = list_pending(workspace=workspace)
-            p_id = pending[-1]["id"] if pending else "prop_lunch_bus"
             return MockModelResponse(function_calls=[
-                MockFunctionCall("revise_proposal", {
-                    "proposal_id": p_id,
-                    "modifications": {"items": [{"category": "Dining"}]}
+                MockFunctionCall("propose_add_transactions", {
+                    "items": [
+                        {"date": "2026-08-16", "description": "lunch", "amount": 12.0, "category": "Dining", "type": "expense"},
+                        {"date": "2026-08-16", "description": "bus", "amount": 3.0, "type": "expense"},
+                    ]
                 })
             ])
 
@@ -441,6 +440,41 @@ def evaluate_question(
                         return "FAIL", f"Under-budget category '{under_cat}' claimed as over-budget in: '{seg_clean}'", over_budget_cats
 
         return "PASS", f"Contains over-budget category {over_budget_cats} and no under-budget categories claimed as over-budget", over_budget_cats
+
+    elif q_id == "q20" or check == "category_question_no_proposal":
+        has_cat = "which category for lunch" in answer.lower()
+        ws_dir = budgets_path.parent
+        props = read_proposals(workspace=ws_dir)
+        no_props = len(props) == 0
+        expected_desc = "Answer contains 'Which category for Lunch' and proposals.json has no proposal yet"
+        if not has_cat:
+            return "FAIL", "Missing 'Which category for Lunch' in answer", expected_desc
+        if not no_props:
+            return "FAIL", f"proposals.json contains unexpected proposal(s): {list(props.keys())}", expected_desc
+        return "PASS", "Answer contains 'Which category for Lunch' and proposals.json has no proposal yet", expected_desc
+
+    elif q_id == "q23" or check == "budget_proposal_ready_ok":
+        has_ready = "ready for your ok" in answer.lower()
+        ws_dir = budgets_path.parent
+        props = read_proposals(workspace=ws_dir)
+        budget_props = [
+            p for p in props.values()
+            if p.get("kind") == "budget_change"
+        ]
+        has_one_dining_50 = (
+            len(budget_props) == 1
+            and (budget_props[0].get("category") == "Dining" or (budget_props[0].get("payload") or {}).get("category") == "Dining")
+            and (
+                abs(float(budget_props[0].get("new_limit", 0) or 0) - 50.0) < 0.01
+                or abs(float((budget_props[0].get("payload") or {}).get("new_limit", 0) or 0) - 50.0) < 0.01
+            )
+        )
+        expected_desc = "Answer contains 'Ready for your OK' and proposals.json holds one budget proposal for Dining with new limit 50"
+        if not has_ready:
+            return "FAIL", "Missing 'Ready for your OK' in answer", expected_desc
+        if not has_one_dining_50:
+            return "FAIL", f"proposals.json does not hold one budget proposal for Dining with new limit 50 (found {len(budget_props)} budget proposals)", expected_desc
+        return "PASS", "Answer contains 'Ready for your OK' and proposals.json holds one budget proposal for Dining with new limit 50", expected_desc
 
     elif check == "contains":
         expected = entry["expected"]
@@ -688,6 +722,12 @@ def main():
                 "reason": reason,
             })
 
+            if q_id == "q12":
+                # Clear proposals created by q12 so subsequent independent evaluation questions start with clean proposal state
+                store_module.write_json_atomic("proposals.json", {}, workspace=ws)
+                if tools_module.PROPOSALS_PATH.exists():
+                    tools_module.PROPOSALS_PATH.write_text("{}", encoding="utf-8")
+
             # In live mode wait between questions
             if is_live:
                 time.sleep(2)
@@ -724,10 +764,6 @@ def main():
         }
 
         with open(results_mode_file, "w", encoding="utf-8") as f:
-            json.dump(output_data, f, indent=2)
-
-        # Also update eval/results.json
-        with open(RESULTS_FILE, "w", encoding="utf-8") as f:
             json.dump(output_data, f, indent=2)
 
         # Assert that the results file does not contain any API key

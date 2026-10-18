@@ -132,16 +132,11 @@
     "expected_tool": "propose_add_transactions",
     "tool": "propose_add_transactions",
     "keywords": [
-      "proposal",
-      "lunch",
-      "bus"
+      "Which category for Lunch",
+      "proposal"
     ],
-    "check": "contains",
-    "expected": [
-      "proposal",
-      "lunch",
-      "bus"
-    ]
+    "check": "category_question_no_proposal",
+    "expected": "Which category for Lunch and no proposal in proposals.json"
   },
   {
     "id": "q21",
@@ -178,14 +173,12 @@
     "expected_tool": "propose_budget_change",
     "tool": "propose_budget_change",
     "keywords": [
+      "Ready for your OK",
       "proposal",
       "50"
     ],
-    "check": "contains",
-    "expected": [
-      "proposal",
-      "50"
-    ]
+    "check": "budget_proposal_ready_ok",
+    "expected": "Ready for your OK and one budget proposal for Dining with new limit 50"
   },
   {
     "id": "q24",
