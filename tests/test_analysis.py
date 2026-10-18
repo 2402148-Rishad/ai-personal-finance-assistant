@@ -294,3 +294,61 @@ class TestAnalysisTools:
         assert "error" not in data
         assert "simulated_sandbox_balance" in data
         assert "simulated_starting_balance" not in data
+
+    def test_grounding_replaces_wrong_dining_total(self, monkeypatch):
+        """Grounding check: when a model states the wrong July Dining total (e.g. $450.00),
+        the grounding check replaces the answer so the returned answer shows $510.00.
+        """
+        from unittest.mock import MagicMock
+        from src import agent as agent_module
+        from google.genai import types
+
+        calls = 0
+
+        def mock_generate_content(model, contents, config=None):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return types.GenerateContentResponse(
+                    candidates=[
+                        types.Candidate(
+                            content=types.Content(
+                                role="model",
+                                parts=[
+                                    types.Part.from_function_call(
+                                        name="spending_by_category",
+                                        args={"month": "2026-06"},
+                                    ),
+                                    types.Part.from_function_call(
+                                        name="spending_by_category",
+                                        args={"month": "2026-07"},
+                                    ),
+                                ],
+                            )
+                        )
+                    ]
+                )
+            # Model returns answer with the wrong July total ($450.00 instead of $510.00)
+            return types.GenerateContentResponse(
+                candidates=[
+                    types.Candidate(
+                        content=types.Content(
+                            role="model",
+                            parts=[
+                                types.Part.from_text(
+                                    text="Yes, your dining spending jumped from $166.00 in June to $450.00 in July."
+                                )
+                            ],
+                        ),
+                    )
+                ]
+            )
+
+        mock_client = MagicMock()
+        mock_client.models.generate_content.side_effect = mock_generate_content
+        monkeypatch.setattr(agent_module.genai, "Client", lambda **kwargs: mock_client)
+
+        res = agent_module.run_agent("Did my dining spending jump in July compared to June?")
+        assert "$510.00" in res.answer
+        assert "$450.00" not in res.answer
+        assert "166.00" in res.answer

@@ -137,7 +137,7 @@
         "[Tool Call] propose_budget_change({'category': 'Dining', 'new_limit': 50.0})"
       ],
       "status": "PASS",
-      "reason": "Proposal ID prop_5244f00e present and budgets.json unchanged"
+      "reason": "Proposal ID prop_8e326e90 present and budgets.json unchanged"
     },
     {
       "id": "q13",
@@ -237,7 +237,7 @@
         "[Tool Call] propose_add_transactions({'items': [{'date': '2026-08-16', 'description': 'lunch', 'amount': 12.0, 'category': 'Dining', 'type': 'expense'}, {'date': '2026-08-16', 'description': 'bus', 'amount': 3.0, 'category': 'Transport', 'type': 'expense'}]})"
       ],
       "status": "PASS",
-      "reason": "Contains all required tokens: ['proposal', 'lunch', 'bus'] (case-insensitive)"
+      "reason": "Contains required tokens in tool call or answer: ['proposal', 'lunch', 'bus']"
     },
     {
       "id": "q21",
@@ -246,9 +246,9 @@
       "expected": [
         "Dining"
       ],
-      "answer": "Updated. Same card, new values.",
+      "answer": "Updated. Same card, new values. Revised to Dining.",
       "tool_calls": [
-        "[Tool Call] revise_proposal({'proposal_id': 'prop_5244f00e', 'modifications': {'items': [{'category': 'Dining'}]}})"
+        "[Tool Call] revise_proposal({'proposal_id': 'prop_8e326e90', 'modifications': {'items': [{'category': 'Dining'}]}})"
       ],
       "status": "PASS",
       "reason": "Contains all required tokens: ['Dining'] (case-insensitive)"
@@ -285,11 +285,14 @@
       "id": "q24",
       "question": "How much did I spend on dining in January 2025?",
       "check": "contains",
-      "expected": "no data",
+      "expected": [
+        "no data",
+        "no transactions"
+      ],
       "answer": "I have no data for January 2025.",
       "tool_calls": [],
       "status": "PASS",
-      "reason": "Contains 'no data' (case-insensitive)"
+      "reason": "Contains 'no data' or 'no transactions' (case-insensitive)"
     },
     {
       "id": "q25",

@@ -35,7 +35,24 @@ def format_month_label(val: Any) -> str:
         return dt.strftime("%B %Y")
     except Exception:
         pass
-    return s
+def _extract_all_numbers(data) -> set[float]:
+    """Recursively extract all numeric values from dict, list, float/int or strings."""
+    nums: set[float] = set()
+    if isinstance(data, (int, float)):
+        nums.add(round(float(data), 2))
+    elif isinstance(data, dict):
+        for v in data.values():
+            nums.update(_extract_all_numbers(v))
+    elif isinstance(data, list):
+        for item in data:
+            nums.update(_extract_all_numbers(item))
+    elif isinstance(data, str):
+        for match in re.findall(r"-?\d+(?:,\d{3})*(?:\.\d+)?", data):
+            try:
+                nums.add(round(float(match.replace(",", "")), 2))
+            except ValueError:
+                pass
+    return nums
 
 
 def build_source_line(tool_calls: list[dict]) -> str:
@@ -603,11 +620,110 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
                         for tc in all_tool_calls
                     )
                     if has_revision:
-                        answer = "Updated. Same card, new values."
+                        rev_info = ""
+                        for tc in all_tool_calls:
+                            if tc.get("name") == "revise_proposal":
+                                args = tc.get("arguments", {})
+                                mods = args.get("modifications", {})
+                                if isinstance(mods, dict):
+                                    items = mods.get("items", [{}])
+                                    cat = items[0].get("category") if items and isinstance(items, list) and isinstance(items[0], dict) else None
+                                    if cat:
+                                        rev_info = f" Revised to {cat}."
+                        answer = f"Updated. Same card, new values.{rev_info}"
                     elif has_overflow:
                         answer = "Ready for your OK. Created a proposal for the first 10 items. What would you like to do about the remaining items?"
                     elif has_creation:
                         answer = "Ready for your OK. Nothing is saved until you approve."
+
+                # Grounding check: every dollar amount in a spending answer must come from a tool result
+                spending_tools = {"spending_by_category", "get_transactions", "get_monthly_summary", "budget_status"}
+                spending_tcs = [tc for tc in all_tool_calls if tc.get("name") in spending_tools]
+                if spending_tcs:
+                    tool_numbers = set()
+                    for tc in all_tool_calls:
+                        tool_numbers.update(_extract_all_numbers(tc.get("result")))
+
+                    # Extract all dollar amounts or currency numbers from answer
+                    dollar_matches = re.findall(r"\$\s*(-?\d+(?:,\d{3})*(?:\.\d+)?)", answer)
+                    currency_matches = re.findall(r"\b(\d+\.\d{2})\b", answer)
+                    found_dollars = []
+                    for s in dollar_matches + currency_matches:
+                        try:
+                            val = round(float(s.replace(",", "")), 2)
+                            if val > 0:
+                                found_dollars.append(val)
+                        except ValueError:
+                            pass
+
+                    has_ungrounded = any(not any(abs(d - tn) <= 0.01 for tn in tool_numbers) for d in found_dollars)
+                    if has_ungrounded and found_dollars:
+                        # Replace answer with the tool's total and a plain sentence
+                        q_lower_check = question.lower()
+                        matched_cat = None
+                        for cat_cand in ["Dining", "Groceries", "Transport", "Health", "Utilities", "Shopping", "Entertainment"]:
+                            if cat_cand.lower() in q_lower_check:
+                                matched_cat = cat_cand
+                                break
+
+                        months_seen = []
+                        for tc in spending_tcs:
+                            m_arg = tc.get("arguments", {}).get("month")
+                            if m_arg and m_arg not in months_seen:
+                                months_seen.append(m_arg)
+
+                        MONTH_NAMES = {
+                            "01": "January", "02": "February", "03": "March", "04": "April",
+                            "05": "May", "06": "June", "07": "July", "08": "August",
+                            "09": "September", "10": "October", "11": "November", "12": "December"
+                        }
+
+                        if len(months_seen) >= 2 and matched_cat:
+                            m_totals = {}
+                            for m in months_seen:
+                                for tc in spending_tcs:
+                                    if tc.get("arguments", {}).get("month") == m:
+                                        res = tc.get("result", {})
+                                        if isinstance(res, dict):
+                                            s_cat = res.get("spending_by_category", {})
+                                            if matched_cat in s_cat:
+                                                m_totals[m] = float(s_cat[matched_cat])
+                                            elif "transactions" in res:
+                                                txs = res["transactions"]
+                                                m_totals[m] = sum(float(t.get("amount", 0)) for t in txs if str(t.get("category", "")).lower() == matched_cat.lower() and t.get("type") == "expense")
+                            if len(m_totals) >= 2:
+                                sorted_m = sorted(m_totals.keys())
+                                m1, m2 = sorted_m[0], sorted_m[1]
+                                t1, t2 = m_totals[m1], m_totals[m2]
+                                name1 = MONTH_NAMES.get(m1[-2:], m1)
+                                name2 = MONTH_NAMES.get(m2[-2:], m2)
+                                if t2 > t1:
+                                    answer = f"Yes, your {matched_cat.lower()} spending jumped from ${t1:.2f} in {name1} to ${t2:.2f} in {name2}."
+                                else:
+                                    answer = f"Your {matched_cat.lower()} spending was ${t1:.2f} in {name1} and ${t2:.2f} in {name2}."
+                        elif matched_cat and len(months_seen) == 1:
+                            m = months_seen[0]
+                            name = MONTH_NAMES.get(m[-2:], m)
+                            amt = 0.0
+                            for tc in spending_tcs:
+                                res = tc.get("result", {})
+                                if isinstance(res, dict):
+                                    s_cat = res.get("spending_by_category", {})
+                                    if matched_cat in s_cat:
+                                        amt = float(s_cat[matched_cat])
+                                        break
+                                    elif "transactions" in res:
+                                        txs = res["transactions"]
+                                        amt = sum(float(t.get("amount", 0)) for t in txs if str(t.get("category", "")).lower() == matched_cat.lower() and t.get("type") == "expense")
+                                        break
+                            answer = f"Your {matched_cat.lower()} spending was ${amt:.2f} in {name}."
+                        else:
+                            tot = 0.0
+                            tc = spending_tcs[0]
+                            res = tc.get("result", {})
+                            if isinstance(res, dict):
+                                tot = res.get("total_spent") or res.get("total_expenses") or 0.0
+                            answer = f"Your spending total was ${float(tot):.2f}."
 
                 # Remove any Source line from the answer text - Source goes only into 'How I got this'
                 answer = re.sub(r'(?i)\n*\bSource:\s*.*$', '', answer).strip()
