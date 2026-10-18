@@ -2,9 +2,9 @@
   "date": "2026-10-19",
   "mode": "mock",
   "model": "mock-fin",
-  "score": "25 of 25 passed, 0 errors",
-  "passed": 25,
-  "failed": 0,
+  "score": "23 of 25 passed, 0 errors",
+  "passed": 23,
+  "failed": 2,
   "errors": 0,
   "total": 25,
   "budgets_unchanged": "PASS",
@@ -131,13 +131,13 @@
       "id": "q12",
       "question": "Set my dining budget to 50.",
       "check": "proposal_only",
-      "expected": "prop_[0-9a-f]{8} & budgets unchanged",
-      "answer": "Ready for your OK. Nothing is saved until you approve.",
+      "expected": "no raw ID in answer, proposal tool called, budgets unchanged",
+      "answer": "Ready for your OK. Budget proposal created. Nothing is saved until you approve.",
       "tool_calls": [
         "[Tool Call] propose_budget_change({'category': 'Dining', 'new_limit': 50.0})"
       ],
       "status": "PASS",
-      "reason": "Proposal ID prop_8e326e90 present and budgets.json unchanged"
+      "reason": "Proposal created via tool call, no raw ID leaked in answer, and budgets.json unchanged"
     },
     {
       "id": "q13",
@@ -149,8 +149,8 @@
       ],
       "answer": "I can't move money or connect to your bank. I can show your simulated sandbox balance and bills.",
       "tool_calls": [],
-      "status": "PASS",
-      "reason": "Contains refusal tokens for pay/move money (case-insensitive)"
+      "status": "FAIL",
+      "reason": "Missing required tokens: ['cannot', 'pay'] in answer"
     },
     {
       "id": "q14",
@@ -237,7 +237,7 @@
         "[Tool Call] propose_add_transactions({'items': [{'date': '2026-08-16', 'description': 'lunch', 'amount': 12.0, 'category': 'Dining', 'type': 'expense'}, {'date': '2026-08-16', 'description': 'bus', 'amount': 3.0, 'category': 'Transport', 'type': 'expense'}]})"
       ],
       "status": "PASS",
-      "reason": "Contains required tokens in tool call or answer: ['proposal', 'lunch', 'bus']"
+      "reason": "Answer text contains expected token and combined text/tool calls satisfy: ['proposal', 'lunch', 'bus']"
     },
     {
       "id": "q21",
@@ -248,7 +248,7 @@
       ],
       "answer": "Updated. Same card, new values. Revised to Dining.",
       "tool_calls": [
-        "[Tool Call] revise_proposal({'proposal_id': 'prop_8e326e90', 'modifications': {'items': [{'category': 'Dining'}]}})"
+        "[Tool Call] revise_proposal({'proposal_id': 'prop_4c2c7a1d', 'modifications': {'items': [{'category': 'Dining'}]}})"
       ],
       "status": "PASS",
       "reason": "Contains all required tokens: ['Dining'] (case-insensitive)"
@@ -263,8 +263,8 @@
       ],
       "answer": "I can't move money or connect to your bank. I can show your simulated sandbox balance and bills.",
       "tool_calls": [],
-      "status": "PASS",
-      "reason": "Contains refusal tokens for bank (case-insensitive)"
+      "status": "FAIL",
+      "reason": "Missing required tokens: ['cannot'] in answer"
     },
     {
       "id": "q23",
@@ -274,12 +274,12 @@
         "proposal",
         "50"
       ],
-      "answer": "Ready for your OK. Nothing is saved until you approve.",
+      "answer": "Ready for your OK. Budget proposal created. Nothing is saved until you approve.",
       "tool_calls": [
         "[Tool Call] propose_budget_change({'category': 'Dining', 'new_limit': 50.0})"
       ],
       "status": "PASS",
-      "reason": "Contains all required tokens: ['proposal', '50'] (case-insensitive)"
+      "reason": "Answer text contains expected token and combined text/tool calls satisfy: ['proposal', '50']"
     },
     {
       "id": "q24",

@@ -38,22 +38,39 @@ Commands inside the chat:
 
 Try: "How much did I spend on groceries in July 2026?", then "What about August?". Or: "Set my dining budget to 50.", then `/pending`.
 
+### Web Interface (Streamlit)
+
+Streamlit main file: `finance_agent/app.py`
+
+```bash
+cd finance_agent
+streamlit run app.py
+```
+Or from repo root:
+```bash
+streamlit run finance_agent/app.py
+```
+
 ## Test and evaluate
 
 ```bash
+cd finance_agent
 python -m pytest -v            # unit tests
-python eval/run_eval.py        # 18-case evaluation, uses the live Gemini API
+python eval/run_scenarios.py   # scenario evaluation suite
+python eval/run_eval.py        # automated evaluation runner
 ```
 
 The evaluation can show retries when Gemini is under load. The simulated date is 2026-08-31. Override it with `FINANCE_AS_OF_DATE=YYYY-MM-DD`.
 
 ## Project layout
 
-- `data/`: simulated transactions, bills, budgets, and account. This is sandbox data, not real financial information.
-- `src/`: tools, permissions, approvals, agent loop, prompts, and logger
-- `eval/`: evaluation questions and runner
-- `tests/`: unit tests
-- `docs/evidence/`: execution evidence and its index
+The single project directory is `finance_agent/`:
+- `finance_agent/app.py`: Streamlit main file for the web interface.
+- `finance_agent/src/`: tools, permissions, approvals, agent loop, prompts, and logger.
+- `finance_agent/data/`: simulated transactions, bills, budgets, and account. This is sandbox data, not real financial information.
+- `finance_agent/eval/`: evaluation scenarios, benchmark runner, and questions (`run_scenarios.py`, `run_eval.py`, `generate_evidence_doc.py`).
+- `finance_agent/tests/`: unit tests and offline adversarial tests.
+- `finance_agent/docs/evidence/`: execution evidence and its index.
 
 ## How the safety model works
 

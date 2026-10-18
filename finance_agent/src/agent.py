@@ -634,7 +634,14 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
                     elif has_overflow:
                         answer = "Ready for your OK. Created a proposal for the first 10 items. What would you like to do about the remaining items?"
                     elif has_creation:
-                        answer = "Ready for your OK. Nothing is saved until you approve."
+                        has_bgt_creation = any(
+                            tc.get("name") == "propose_budget_change"
+                            for tc in all_tool_calls
+                        )
+                        if has_bgt_creation:
+                            answer = "Ready for your OK. Budget proposal created. Nothing is saved until you approve."
+                        else:
+                            answer = "Ready for your OK. Nothing is saved until you approve."
 
                 # Grounding check: every dollar amount in a spending answer must come from a tool result
                 spending_tools = {"spending_by_category", "get_transactions", "get_monthly_summary", "budget_status"}
