@@ -332,12 +332,7 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
                 raw_answer = response.text or ""
                 # Strip any model-hallucinated source line
                 clean_answer = re.sub(r'(?i)\n*\bSource:\s*.*$', '', raw_answer).strip()
-                has_numbers = bool(re.search(r'\d', clean_answer))
-                source_line = build_source_line(all_tool_calls)
-                if has_numbers and source_line:
-                    answer = f"{clean_answer}\n\n{source_line}"
-                else:
-                    answer = clean_answer
+                answer = clean_answer
 
                 # 2.5) final_answer: log the answer text
                 log_event("final_answer", {"answer": answer})

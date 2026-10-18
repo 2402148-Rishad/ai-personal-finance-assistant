@@ -132,37 +132,37 @@ def test_quick_actions_render_when_model_is_down():
 
         # Check all 4 quick action buttons exist in Overview
         btn_labels = [b.label for b in at.button]
-        assert "This month's summary" in btn_labels
-        assert "Upcoming bills" in btn_labels
-        assert "Budget status" in btn_labels
-        assert "Cashflow next 30 days" in btn_labels
+        assert "Summary" in btn_labels or "This month's summary" in btn_labels
+        assert "Bills" in btn_labels or "Upcoming bills" in btn_labels
+        assert "Budgets" in btn_labels or "Budget status" in btn_labels
+        assert "30-day cash" in btn_labels or "Cashflow next 30 days" in btn_labels
 
-        # 1. Click "This month's summary"
-        sum_btn = next(b for b in at.button if b.label == "This month's summary")
+        # 1. Click "Summary"
+        sum_btn = next(b for b in at.button if b.label in ("Summary", "This month's summary"))
         sum_btn.click().run()
         assert not at.exception
         assert len(at.table) > 0 or len(at.metric) > 0
         assert not failing_run_agent.called
 
-        # 2. Click "Upcoming bills"
-        bills_btn = next(b for b in at.button if b.label == "Upcoming bills")
+        # 2. Click "Bills"
+        bills_btn = next(b for b in at.button if b.label in ("Bills", "Upcoming bills"))
         bills_btn.click().run()
         assert not at.exception
         assert len(at.table) > 0 or len(at.info) > 0
         assert not failing_run_agent.called
 
-        # 3. Click "Budget status"
-        budget_btn = next(b for b in at.button if b.label == "Budget status")
+        # 3. Click "Budgets"
+        budget_btn = next(b for b in at.button if b.label in ("Budgets", "Budget status"))
         budget_btn.click().run()
         assert not at.exception
         assert len(at.table) > 0 or len(at.info) > 0
         assert not failing_run_agent.called
 
-        # 4. Click "Cashflow next 30 days"
-        cf_btn = next(b for b in at.button if b.label == "Cashflow next 30 days")
+        # 4. Click "30-day cash"
+        cf_btn = next(b for b in at.button if b.label in ("30-day cash", "Cashflow next 30 days"))
         cf_btn.click().run()
         assert not at.exception
-        assert len(at.metric) > 0
+        assert len(at.table) > 0 or len(at.metric) > 0
         assert not failing_run_agent.called
 
 

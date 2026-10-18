@@ -43,6 +43,15 @@ try:
 except ImportError:
     import store
 
+try:
+    from src.categories import suggest_category
+except ImportError:
+    try:
+        from categories import suggest_category
+    except ImportError:
+        def suggest_category(text, workspace=None):
+            return None
+
 
 class JsonDict(str):
     """String subclass containing JSON that also allows dict-like access for Python callers."""
@@ -920,6 +929,7 @@ def propose_add_transactions(items: list | str) -> str:
             is_cat_ambiguous = False
             if not is_cat_missing:
                 cat_input = str(raw_cat).strip()
+                cat_input = re.sub(r"\s*\(suggested\)$", "", cat_input, flags=re.I).strip()
                 exact_m = [c for c in ws_cats if c.lower() == cat_input.lower()]
                 if len(exact_m) == 1:
                     item["category"] = exact_m[0]
@@ -939,10 +949,21 @@ def propose_add_transactions(items: list | str) -> str:
 
             if is_cat_missing or is_cat_ambiguous:
                 most_used = get_most_used_categories(workspace=workspace_dir)
+                suggested = None
+                if is_cat_missing:
+                    suggested = suggest_category(item.get("description"), workspace=workspace_dir)
+
+                if suggested:
+                    first_opt = f"{suggested} (suggested)"
+                    rest = [c for c in most_used if c.lower() != suggested.lower()]
+                    options_list = [first_opt] + rest
+                else:
+                    options_list = most_used
+
                 return json.dumps({
                     "status": "needs_clarification",
                     "missing": ["category"],
-                    "options": {"category": most_used},
+                    "options": {"category": options_list},
                     "message": f"Item {idx + 1} category is missing or matches multiple categories. Please select a category.",
                 })
 

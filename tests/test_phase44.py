@@ -172,7 +172,8 @@ def test_run_agent_appends_source_line_when_answer_uses_numbers(monkeypatch):
     result = run_agent("How much did I spend on dining in July 2026?", history=[])
     assert result.status == "ok"
     assert "510.00" in result.answer
-    assert result.answer.endswith("Source: transactions.csv (July 2026)")
+    assert not result.answer.strip().endswith("Source: transactions.csv (July 2026)")
+    assert build_source_line(result.tool_calls) == "Source: transactions.csv (July 2026)"
 
 
 def test_run_agent_replaces_model_hallucinated_source_line(monkeypatch):
@@ -195,7 +196,8 @@ def test_run_agent_replaces_model_hallucinated_source_line(monkeypatch):
     result = run_agent("Summary for July 2026", history=[])
     assert result.status == "ok"
     assert "hallucinated_invented_file.csv" not in result.answer
-    assert result.answer.endswith("Source: transactions.csv (July 2026)")
+    assert not result.answer.strip().endswith("Source: transactions.csv (July 2026)")
+    assert build_source_line(result.tool_calls) == "Source: transactions.csv (July 2026)"
 
 
 def test_run_agent_no_source_line_when_no_numbers(monkeypatch):

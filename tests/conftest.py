@@ -50,3 +50,26 @@ def reset_active_workspace():
     except Exception:
         pass
 
+
+@pytest.fixture(autouse=True)
+def clean_global_proposals():
+    """Ensure pending_proposals.json is clean before and after every test."""
+    try:
+        import json
+        from src.approvals import PROPOSALS_PATH
+        if PROPOSALS_PATH and PROPOSALS_PATH.exists():
+            with open(PROPOSALS_PATH, "w", encoding="utf-8") as f:
+                json.dump({}, f)
+    except Exception:
+        pass
+    yield
+    try:
+        import json
+        from src.approvals import PROPOSALS_PATH
+        if PROPOSALS_PATH and PROPOSALS_PATH.exists():
+            with open(PROPOSALS_PATH, "w", encoding="utf-8") as f:
+                json.dump({}, f)
+    except Exception:
+        pass
+
+

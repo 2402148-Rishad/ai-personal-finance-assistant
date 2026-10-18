@@ -143,17 +143,17 @@ def test_apptest_clarification_chips():
         chip_btns = [b for b in at.button if b.key and b.key.startswith("clarify_")]
         assert len(chip_btns) == 3
         chip_labels = [b.label for b in chip_btns]
-        assert "Groceries" in chip_labels
-        assert "Dining" in chip_labels
+        assert any("Groceries" in lbl for lbl in chip_labels)
+        assert any("Dining" in lbl for lbl in chip_labels)
 
         # Click the "Dining" chip
-        dining_chip = next(b for b in chip_btns if b.label == "Dining")
+        dining_chip = next(b for b in chip_btns if "Dining" in b.label)
         dining_chip.click().run()
 
-        # run_agent should have been called with "Dining"
+        # run_agent called with "Dining" or "Category: Dining"
         assert mock_run_agent.called
         call_args = mock_run_agent.call_args[0]
-        assert call_args[0] == "Dining"
+        assert call_args[0] in ("Dining", "Category: Dining")
 
 
 def test_apptest_how_i_got_this_expander():

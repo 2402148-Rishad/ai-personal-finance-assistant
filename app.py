@@ -7,7 +7,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from src.agent import run_agent
+from src.agent import run_agent, build_source_line
 from src.approvals import list_pending, approve, reject, undo
 from src.banner import get_do_this_next_banner
 from src.config import AS_OF_DATE
@@ -149,6 +149,9 @@ div[data-testid="stRadio"] div[role="radiogroup"] label[data-baseweb="radio"][ar
         width: 100% !important;
         min-width: 100% !important;
         flex: 1 1 100% !important;
+    }
+    .stButton > button {
+        width: 100% !important;
     }
 }
 html, body, [data-testid="stAppViewContainer"] {
@@ -388,6 +391,10 @@ with left_col:
                                             st.markdown(f"**Key numbers:** {', '.join(key_nums)}")
                                     st.divider()
 
+                                src_line = build_source_line(tool_calls)
+                                if src_line:
+                                    st.markdown(escape_dollars(src_line))
+
                         # Task 2: Clarification options as clickable chips
                         clarifications = item.get("clarification_options", [])
                         if clarifications:
@@ -395,8 +402,14 @@ with left_col:
                             cols = st.columns(min(len(clarifications), 4))
                             for c_idx, opt_str in enumerate(clarifications):
                                 with cols[c_idx % len(cols)]:
-                                    if st.button(opt_str, key=f"clarify_{msg_idx}_{c_idx}"):
-                                        handle_chat_submit(opt_str)
+                                    if opt_str in ("Add anyway", "Cancel"):
+                                        btn_lbl = opt_str
+                                        send_val = opt_str
+                                    else:
+                                        btn_lbl = f"{c_idx + 1}. {opt_str}"
+                                        send_val = f"Category: {opt_str}"
+                                    if st.button(btn_lbl, key=f"clarify_{msg_idx}_{c_idx}"):
+                                        handle_chat_submit(send_val)
 
                         # Task 1: Inline approval cards
                         prop_ids = item.get("proposal_ids", [])
@@ -498,6 +511,8 @@ with left_col:
                                                     res = reject(p_id, workspace=session_ws)
                                                     st.info(res.get("message", "Proposal rejected."))
                                                     st.rerun()
+
+                                st.markdown("Want a change? Say it, e.g. 'make it 40' or 'change to Groceries'.")
 
     # Send form with placeholder only in the input box
     with st.form(key="chat_form", clear_on_submit=False):
@@ -667,13 +682,13 @@ with right_col:
         st.subheader("Quick actions")
         qa_col1, qa_col2, qa_col3, qa_col4 = st.columns(4)
         with qa_col1:
-            btn_sum = st.button("This month's summary", key="qa_btn_summary")
+            btn_sum = st.button("Summary", key="qa_btn_summary", use_container_width=True)
         with qa_col2:
-            btn_bills = st.button("Upcoming bills", key="qa_btn_bills")
+            btn_bills = st.button("Bills", key="qa_btn_bills", use_container_width=True)
         with qa_col3:
-            btn_budget = st.button("Budget status", key="qa_btn_budget")
+            btn_budget = st.button("Budgets", key="qa_btn_budget", use_container_width=True)
         with qa_col4:
-            btn_cf = st.button("Cashflow next 30 days", key="qa_btn_cashflow")
+            btn_cf = st.button("30-day cash", key="qa_btn_cashflow", use_container_width=True)
 
         if btn_sum:
             st.session_state["overview_quick_action"] = "summary"
@@ -693,11 +708,6 @@ with right_col:
             t_exp = float(sum_data.get("total_expenses", 0.0))
             n_sav = float(sum_data.get("net_savings", 0.0))
             s_rate = float(sum_data.get("savings_rate", 0.0))
-            sm1, sm2, sm3, sm4 = st.columns(4)
-            sm1.metric("Income", f"${t_inc:,.2f}")
-            sm2.metric("Expenses", f"${t_exp:,.2f}")
-            sm3.metric("Net Savings", f"${n_sav:,.2f}")
-            sm4.metric("Savings Rate", f"{s_rate:.1f}%")
             sum_rows = [
                 {"Metric": "Total Income", "Value": f"${t_inc:,.2f}"},
                 {"Metric": "Total Expenses", "Value": f"${t_exp:,.2f}"},
@@ -751,9 +761,11 @@ with right_col:
             cf_qa_data = json.loads(raw_cf_qa)
             sim_bal = float(cf_qa_data.get("simulated_sandbox_balance", 0.0))
             low_bal = float(cf_qa_data.get("lowest_balance") if "lowest_balance" in cf_qa_data else cf_qa_data.get("lowest_projected_balance", 0.0))
-            cfm1, cfm2 = st.columns(2)
-            cfm1.metric("Simulated Sandbox Balance", f"${sim_bal:,.2f}")
-            cfm2.metric("Lowest Projected Balance", f"${low_bal:,.2f}")
+            cf_summary_rows = [
+                {"Metric": "Simulated Sandbox Balance", "Value": f"${sim_bal:,.2f}"},
+                {"Metric": "Lowest Projected Balance", "Value": f"${low_bal:,.2f}"},
+            ]
+            st.table(pd.DataFrame(cf_summary_rows))
             bills_list = cf_qa_data.get("scheduled_bills", []) or cf_qa_data.get("daily_projections", [])
             if bills_list:
                 cf_table_rows = []
