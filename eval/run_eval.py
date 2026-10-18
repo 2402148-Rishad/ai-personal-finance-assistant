@@ -1,3 +1,4 @@
+# q21 depends on q20 (a pending proposal must exist). Phase 6 runs cases in a fixed order inside one workspace.
 """Automated evaluation suite for the Personal Finance Assistant."""
 
 import contextlib

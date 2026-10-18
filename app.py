@@ -729,7 +729,7 @@ with right_col:
             st.markdown(f"**Budget Status ({selected_month})**")
             raw_bs_qa = budget_status(month=selected_month)
             bs_qa_data = json.loads(raw_bs_qa)
-            cat_map = bs_qa_data.get("status_by_category", {})
+            cat_map = bs_qa_data.get("categories") or bs_qa_data.get("status_by_category", {})
             if cat_map:
                 bs_rows = [
                     {
@@ -737,7 +737,7 @@ with right_col:
                         "Spent": f"${float(info.get('spent', 0)):,.2f}",
                         "Limit": f"${float(info.get('limit', 0)):,.2f}",
                         "Remaining": f"${float(info.get('remaining', 0)):,.2f}",
-                        "Status": "Over" if info.get("is_over") else "OK",
+                        "Status": "Over" if (info.get("is_over_budget") or info.get("is_over")) else "OK",
                     }
                     for cat, info in cat_map.items()
                 ]
@@ -750,22 +750,29 @@ with right_col:
             raw_cf_qa = cashflow_projection(today=sandbox_today, days_ahead=30)
             cf_qa_data = json.loads(raw_cf_qa)
             sim_bal = float(cf_qa_data.get("simulated_sandbox_balance", 0.0))
-            low_bal = float(cf_qa_data.get("lowest_projected_balance", 0.0))
+            low_bal = float(cf_qa_data.get("lowest_balance") if "lowest_balance" in cf_qa_data else cf_qa_data.get("lowest_projected_balance", 0.0))
             cfm1, cfm2 = st.columns(2)
             cfm1.metric("Simulated Sandbox Balance", f"${sim_bal:,.2f}")
             cfm2.metric("Lowest Projected Balance", f"${low_bal:,.2f}")
-            daily_list = cf_qa_data.get("daily_projections", [])
-            if daily_list:
-                cf_table_rows = [
-                    {
-                        "Date": d.get("date"),
-                        "Starting": f"${float(d.get('starting_balance', 0)):,.2f}",
-                        "Income": f"${float(d.get('income', 0)):,.2f}",
-                        "Expenses": f"${float(d.get('expenses', 0)):,.2f}",
-                        "Ending": f"${float(d.get('ending_balance', 0)):,.2f}",
-                    }
-                    for d in daily_list[:10]
-                ]
+            bills_list = cf_qa_data.get("scheduled_bills", []) or cf_qa_data.get("daily_projections", [])
+            if bills_list:
+                cf_table_rows = []
+                for item in bills_list[:10]:
+                    if "due_date" in item:
+                        cf_table_rows.append({
+                            "Date": item.get("due_date"),
+                            "Bill": item.get("bill_name"),
+                            "Amount": f"${float(item.get('amount', 0)):,.2f}",
+                            "Category": item.get("category"),
+                        })
+                    else:
+                        cf_table_rows.append({
+                            "Date": item.get("date"),
+                            "Starting": f"${float(item.get('starting_balance', 0)):,.2f}",
+                            "Income": f"${float(item.get('income', 0)):,.2f}",
+                            "Expenses": f"${float(item.get('expenses', 0)):,.2f}",
+                            "Ending": f"${float(item.get('ending_balance', 0)):,.2f}",
+                        })
                 st.table(pd.DataFrame(cf_table_rows))
 
         # Plotly bar chart of spending_by_category(month) in existing style
