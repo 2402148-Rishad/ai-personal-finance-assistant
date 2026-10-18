@@ -481,3 +481,160 @@ def test_deleting_goal_without_confirm_is_rejected(clean_workspace):
         assert len(store.get_goals(workspace=ws)) == 1
 
 
+def test_goal_delete_card_says_confirm_rejects_yes_and_undo_restores():
+    """Propose a goal delete: card says CONFIRM, 'yes' is rejected, CONFIRM deletes goal, and Undo restores it."""
+    from streamlit.testing.v1 import AppTest
+    from unittest.mock import MagicMock, patch
+
+    with patch("src.agent.run_agent", return_value=MagicMock()):
+        at = AppTest.from_file(str(APP_PATH), default_timeout=20).run()
+        app_ws = store.create_workspace(at.session_state["session_id"])
+        store.set_active_workspace(app_ws)
+        store.set_sandbox_today("2026-08-31", workspace=app_ws)
+
+        # Seed goal to delete
+        g = store.add_goal(
+            {
+                "name": "Emergency Fund",
+                "target_amount": 5000.0,
+                "target_date": "2026-12-31",
+                "saved_so_far": 1000.0,
+            },
+            workspace=app_ws,
+        )
+        g_id = g["id"]
+
+        # Propose deleting the goal
+        res_raw = tools.propose_goal(action="delete", goal_id=g_id, workspace=app_ws)
+        p_id = json.loads(res_raw)["proposal_id"]
+
+        # Navigate to Inbox tab
+        at.session_state["active_view"] = "Inbox"
+        at.session_state["active_tab"] = "Inbox"
+        at.run()
+
+        # 1. The card text input says "Type CONFIRM to delete"
+        confirm_input = next((inp for inp in at.text_input if inp.key == f"confirm_input_{p_id}"), None)
+        assert confirm_input is not None
+        assert "CONFIRM" in confirm_input.label
+        assert "delete" in confirm_input.label.lower()
+
+        # 2. Approve button is disabled initially
+        approve_btn = next((b for b in at.button if b.key == f"approve_btn_{p_id}"), None)
+        assert approve_btn is not None
+        assert approve_btn.disabled is True
+
+        # 3. 'yes' is rejected by approval engine
+        res_yes = approvals.approve(p_id, "yes", workspace=app_ws)
+        assert res_yes["status"] == "error"
+        assert "CONFIRM" in res_yes["error"]
+        assert len(store.get_goals(workspace=app_ws)) == 1
+
+        # 4. Typing exact 'CONFIRM' enables the Approve button
+        confirm_input.input("CONFIRM").run()
+        approve_btn = next((b for b in at.button if b.key == f"approve_btn_{p_id}"), None)
+        assert approve_btn.disabled is False
+
+        # Clicking approve deletes the goal
+        approve_btn.click().run()
+        assert len(store.get_goals(workspace=app_ws)) == 0
+
+        # 5. Undo restores the goal
+        undo_res = approvals.undo(workspace=app_ws)
+        assert undo_res["status"] == "undone"
+        restored_goals = store.get_goals(workspace=app_ws)
+        assert len(restored_goals) == 1
+        assert restored_goals[0]["id"] == g_id
+        assert restored_goals[0]["name"] == "Emergency Fund"
+
+
+def test_goal_card_literal_name_no_decimals_no_iso_dates():
+    """A goal name containing **bold** and target_amount renders literally, with no decimals or ISO dates on card."""
+    from streamlit.testing.v1 import AppTest
+    from unittest.mock import MagicMock, patch
+
+    with patch("src.agent.run_agent", return_value=MagicMock()):
+        at = AppTest.from_file(str(APP_PATH), default_timeout=20).run()
+        app_ws = store.create_workspace(at.session_state["session_id"])
+        store.set_active_workspace(app_ws)
+        store.set_sandbox_today("2026-08-31", workspace=app_ws)
+
+        # Propose goal with name containing **bold** and target_amount
+        tools.propose_goal(
+            action="add",
+            name="**bold** target_amount",
+            target_amount=20000.0,
+            target_date="2027-05-31",
+            saved_so_far=0.0,
+            workspace=app_ws,
+        )
+
+        at.session_state["active_view"] = "Inbox"
+        at.session_state["active_tab"] = "Inbox"
+        at.run()
+
+        card_texts = [str(m.value) for m in at.markdown]
+
+        # 1. Goal name renders literally with **bold** and target_amount
+        assert any("**bold** target_amount" in t for t in card_texts)
+
+        # 2. No raw decimal figures like 20000.0 or 0.0
+        assert not any("20000.0" in t for t in card_texts)
+
+        # 3. Formatted currency present: $20,000 and $0
+        assert any("$20,000" in t for t in card_texts)
+        assert any("$0" in t for t in card_texts)
+
+        # 4. No ISO dates like 2027-05-31 or 2026-08-31 in card body
+        body_texts = [t for t in card_texts if "Goal:" in t]
+        assert len(body_texts) >= 1
+        assert not any("2027-05-31" in t for t in body_texts)
+        assert not any("2026-08-31" in t for t in body_texts)
+
+        # 5. Formatted date present
+        assert any("31 May 2027" in t for t in body_texts)
+
+        # 6. No goal ID in body
+        assert not any("g_" in t for t in body_texts)
+
+
+def test_banner_renders_at_most_one_button():
+    """Do this next banner renders at most one action button, with no extra Open Inbox button."""
+    from streamlit.testing.v1 import AppTest
+    from unittest.mock import MagicMock, patch
+    from datetime import datetime, timedelta
+
+    with patch("src.agent.run_agent", return_value=MagicMock()):
+        at = AppTest.from_file(str(APP_PATH), default_timeout=20).run()
+        app_ws = store.create_workspace(at.session_state["session_id"])
+        store.set_active_workspace(app_ws)
+        store.set_sandbox_today("2026-08-15", workspace=app_ws)
+
+        # Case 1: No alerts -> default banner message, 0 banner buttons
+        (app_ws / "bills.csv").write_text("bill_name,amount,due_day,category\n", encoding="utf-8")
+        (app_ws / "transactions.csv").write_text("date,month,category,description,type,amount\n", encoding="utf-8")
+        at.run()
+        banner_btns_empty = [b for b in at.button if b.key in ("banner_action_btn", "open_inbox_banner_btn")]
+        assert len(banner_btns_empty) == 0
+
+        # Case 2: Bill due tomorrow (action: Open Plan) + pending proposal in Inbox
+        bills_data = "bill_name,amount,due_day,category\nElectric,85.0,16,Utilities\n"
+        (app_ws / "bills.csv").write_text(bills_data, encoding="utf-8")
+        (app_ws / "transactions.csv").write_text("date,month,category,description,type,amount\n", encoding="utf-8")
+
+        # Create a low-risk pending proposal (which previously caused an extra Open Inbox button)
+        store.create_proposal(
+            kind="budget_change",
+            payload={"category": "Dining", "new_limit": 400.0},
+            preview={"before": 300.0, "after": 400.0},
+            workspace=app_ws,
+        )
+
+        at.run()
+        banner_btns = [b for b in at.button if b.key in ("banner_action_btn", "open_inbox_banner_btn")]
+        # Exactly one button (Open Plan) for the alert shown; no extra Open Inbox button
+        assert len(banner_btns) == 1
+        assert banner_btns[0].label == "Open Plan"
+
+
+

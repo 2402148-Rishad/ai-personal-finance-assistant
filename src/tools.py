@@ -2747,10 +2747,16 @@ def propose_goal(
 
         if action_clean == "delete":
             if not goal_id:
-                return json.dumps({"error": "Goal ID is required for deleting a goal.", "status": "error"})
-            target_goal = next((g for g in existing_goals if str(g.get("id")) == str(goal_id).strip()), None)
+                if name:
+                    target_goal = next((g for g in existing_goals if str(g.get("name", "")).strip().lower() == str(name).strip().lower()), None)
+                    if target_goal:
+                        goal_id = str(target_goal.get("id"))
+                if not goal_id:
+                    return json.dumps({"error": "Goal ID or name is required for deleting a goal.", "status": "error"})
+            target_goal = next((g for g in existing_goals if str(g.get("id")) == str(goal_id).strip() or str(g.get("name", "")).strip().lower() == str(goal_id).strip().lower()), None)
             if not target_goal:
                 return json.dumps({"error": f"Goal '{goal_id}' not found.", "status": "error"})
+            goal_id = str(target_goal.get("id"))
 
             proposal_id = f"prop_{uuid.uuid4().hex[:8]}"
             preview = {

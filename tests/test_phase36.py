@@ -15,6 +15,7 @@ Tasks:
    - Selecting Ledger shows the Ledger panel.
 """
 
+from datetime import datetime, timedelta
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -23,8 +24,14 @@ from streamlit.testing.v1 import AppTest
 
 import src.tools as tools_module
 import src.approvals as approvals_module
-from src.store import create_workspace, set_active_workspace, reset_workspace
-from src.tools import propose_add_transactions, propose_budget_change
+from src.store import (
+    create_workspace,
+    set_active_workspace,
+    reset_workspace,
+    read_proposals,
+    save_proposal,
+)
+from src.tools import propose_add_transactions, propose_budget_change, PROPOSALS_PATH
 
 APP_PATH = Path(__file__).resolve().parent.parent / "app.py"
 
@@ -49,9 +56,20 @@ def test_clicking_open_inbox_sets_active_view_and_shows_inbox_panel():
         # Initially Overview is selected
         assert at.session_state.active_view == "Overview"
 
-        # Create a pending proposal so the banner displays the 'Open Inbox' button
+        # Create a pending proposal expiring soon so the banner displays the 'Open Inbox' button
+        now = datetime.now()
         prop_raw = propose_budget_change("Dining", 300.0)
         assert json.loads(prop_raw).get("status") == "pending_confirmation"
+        p_id = json.loads(prop_raw)["proposal_id"]
+        exp = (now + timedelta(minutes=30)).isoformat()
+        props = read_proposals(workspace=app_ws)
+        props[p_id]["expires_at"] = exp
+        save_proposal(props[p_id], workspace=app_ws)
+        if PROPOSALS_PATH.exists():
+            legacy = json.loads(PROPOSALS_PATH.read_text("utf-8"))
+            if p_id in legacy:
+                legacy[p_id]["expires_at"] = exp
+                PROPOSALS_PATH.write_text(json.dumps(legacy), "utf-8")
 
         at.run()
 

@@ -269,9 +269,8 @@ with left_col:
         with b_c1:
             _render_banner_msg(banner_text, banner_level)
         with b_c2:
-            st.button(banner_action, key="banner_action_btn", on_click=lambda a=banner_action: _open_action_cb(a))
-            if has_pending and banner_action != "Open Inbox":
-                st.button("Open Inbox", key="open_inbox_banner_btn", on_click=lambda: _open_action_cb("Open Inbox"))
+            btn_key = "open_inbox_banner_btn" if banner_action == "Open Inbox" else "banner_action_btn"
+            st.button(banner_action, key=btn_key, on_click=lambda a=banner_action: _open_action_cb(a))
     else:
         if has_pending:
             b_c1, b_c2 = st.columns([3, 1], vertical_alignment="center")
@@ -559,26 +558,44 @@ with left_col:
                                     with m_c2:
                                         st.caption(format_expiry(expires_at, now_dt))
 
-                                    c_pv1, c_pv2 = st.columns(2)
-                                    with c_pv1:
-                                        st.write(f"**Before:** {format_card_value(before_val)}")
-                                    with c_pv2:
-                                        st.write(f"**After:** {format_card_value(after_val)}")
+                                    kind = prop.get("kind", "")
+                                    if kind in ("goal_change", "preference_change"):
+                                        if before_val is not None and after_val is not None:
+                                            c_pv1, c_pv2 = st.columns(2)
+                                            with c_pv1:
+                                                st.write(f"**Before:** {format_card_value(before_val)}")
+                                            with c_pv2:
+                                                st.write(f"**After:** {format_card_value(after_val)}")
+                                        else:
+                                            val = after_val if after_val is not None else before_val
+                                            st.write(format_card_value(val))
+                                    else:
+                                        c_pv1, c_pv2 = st.columns(2)
+                                        with c_pv1:
+                                            st.write(f"**Before:** {format_card_value(before_val)}")
+                                        with c_pv2:
+                                            st.write(f"**After:** {format_card_value(after_val)}")
 
                                     payload = prop.get("payload", {})
                                     if isinstance(payload, dict) and payload.get("category"):
                                         st.caption(f"Category: {payload.get('category')}")
                                     if isinstance(payload, dict) and payload.get("bill_name"):
                                         st.caption(f"Bill: {payload.get('bill_name')}")
-                                    if isinstance(payload, dict) and (payload.get("name") or payload.get("goal_name")):
+                                    if kind not in ("goal_change", "preference_change") and isinstance(payload, dict) and (payload.get("name") or payload.get("goal_name")):
                                         st.caption(f"Goal: {payload.get('name') or payload.get('goal_name')}")
 
                                     if is_exp:
                                         st.markdown("**:red[Expired]**")
                                     elif is_pending:
+                                        action = payload.get("action", "") if isinstance(payload, dict) else ""
+                                        is_delete = (
+                                            action in ("delete", "remove", "cancel")
+                                            or prop.get("kind") == "delete_transaction"
+                                        )
                                         if risk == "high":
+                                            confirm_label = "Type CONFIRM to delete" if is_delete else "Type CONFIRM to enable approval"
                                             confirm_text = st.text_input(
-                                                "Type CONFIRM to enable approval",
+                                                confirm_label,
                                                 key=f"inline_confirm_{p_id}_{msg_idx}",
                                                 placeholder="CONFIRM",
                                             )
@@ -1698,25 +1715,44 @@ with right_col:
                     st.caption(format_expiry(expires_at, now_dt))
 
                     col_pv1, col_pv2 = st.columns(2)
-                    with col_pv1:
-                        st.write(f"**Before:** {format_card_value(before_val)}")
-                    with col_pv2:
-                        st.write(f"**After:** {format_card_value(after_val)}")
+                    kind = prop.get("kind", "")
+                    if kind in ("goal_change", "preference_change"):
+                        if before_val is not None and after_val is not None:
+                            col_pv1, col_pv2 = st.columns(2)
+                            with col_pv1:
+                                st.write(f"**Before:** {format_card_value(before_val)}")
+                            with col_pv2:
+                                st.write(f"**After:** {format_card_value(after_val)}")
+                        else:
+                            val = after_val if after_val is not None else before_val
+                            st.write(format_card_value(val))
+                    else:
+                        col_pv1, col_pv2 = st.columns(2)
+                        with col_pv1:
+                            st.write(f"**Before:** {format_card_value(before_val)}")
+                        with col_pv2:
+                            st.write(f"**After:** {format_card_value(after_val)}")
 
                     payload = prop.get("payload", {})
                     if isinstance(payload, dict) and payload.get("category"):
                         st.caption(f"Category: {payload.get('category')}")
                     if isinstance(payload, dict) and payload.get("bill_name"):
                         st.caption(f"Bill: {payload.get('bill_name')}")
-                    if isinstance(payload, dict) and (payload.get("name") or payload.get("goal_name")):
+                    if kind not in ("goal_change", "preference_change") and isinstance(payload, dict) and (payload.get("name") or payload.get("goal_name")):
                         st.caption(f"Goal: {payload.get('name') or payload.get('goal_name')}")
 
                     if is_exp:
                         st.markdown("**:red[Expired]**")
                     else:
+                        action = payload.get("action", "") if isinstance(payload, dict) else ""
+                        is_delete = (
+                            action in ("delete", "remove", "cancel")
+                            or prop.get("kind") == "delete_transaction"
+                        )
                         if risk == "high":
+                            confirm_label = "Type CONFIRM to delete" if is_delete else "Type CONFIRM to enable approval"
                             confirm_text = st.text_input(
-                                "Type CONFIRM to enable approval",
+                                confirm_label,
                                 key=f"confirm_input_{p_id}",
                                 placeholder="CONFIRM",
                             )

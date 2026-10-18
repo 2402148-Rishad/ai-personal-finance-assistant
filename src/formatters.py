@@ -44,6 +44,50 @@ def format_card_value(v: Any) -> str:
     if isinstance(v, (int, float)):
         return f"${float(v):,.2f}"
     if isinstance(v, dict):
+        # 1. Goal dictionary formatting
+        if "target_amount" in v or "saved_so_far" in v or ("name" in v and "target_date" in v):
+            name = str(v.get("name", "Goal"))
+            t_amt = v.get("target_amount")
+            t_date = v.get("target_date")
+            saved = v.get("saved_so_far", 0.0)
+
+            if t_amt is not None:
+                amt_f = float(t_amt)
+                amt_str = f"${int(amt_f):,}" if amt_f.is_integer() else f"${amt_f:,.2f}"
+            else:
+                amt_str = "$0"
+
+            date_str = format_date_human(t_date) if t_date else ""
+
+            if saved is not None:
+                saved_f = float(saved)
+                saved_str = f"${int(saved_f):,}" if saved_f.is_integer() else f"${saved_f:,.2f}"
+            else:
+                saved_str = "$0"
+
+            parts = [f"Goal: {name}."]
+            if date_str:
+                parts.append(f"Target {amt_str} by {date_str}.")
+            else:
+                parts.append(f"Target {amt_str}.")
+            parts.append(f"Saved so far {saved_str}.")
+            return " ".join(parts)
+
+        # 2. Preferences dictionary formatting
+        if "savings_target_percent" in v or "alert_bills_days" in v or "currency_label" in v:
+            parts = []
+            if "savings_target_percent" in v:
+                st_val = v["savings_target_percent"]
+                st_str = f"{int(st_val)}" if isinstance(st_val, (int, float)) and float(st_val).is_integer() else f"{st_val}"
+                parts.append(f"savings target {st_str}%")
+            if "alert_bills_days" in v:
+                ab_val = v["alert_bills_days"]
+                ab_str = f"{int(ab_val)}" if isinstance(ab_val, (int, float)) and float(ab_val).is_integer() else f"{ab_val}"
+                parts.append(f"bill alerts {ab_str} days ahead")
+            if "currency_label" in v:
+                parts.append(f"currency label {v['currency_label']}")
+            return "Preferences: " + ", ".join(parts) + "."
+
         amt = v.get("amount")
         cat = v.get("category", "")
         d_val = v.get("date")

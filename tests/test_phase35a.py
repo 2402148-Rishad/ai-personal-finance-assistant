@@ -7,6 +7,7 @@ Tasks:
 5. Rename 'Clear' button to 'Clear chat'.
 """
 
+from datetime import datetime, timedelta
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -21,8 +22,9 @@ from src.store import (
     add_transaction,
     save_proposal,
     read_csv,
+    read_proposals,
 )
-from src.tools import propose_add_transactions, propose_budget_change
+from src.tools import propose_add_transactions, propose_budget_change, PROPOSALS_PATH
 
 APP_PATH = Path(__file__).resolve().parent.parent / "app.py"
 
@@ -83,8 +85,19 @@ def test_banner_ui_heading_and_open_inbox_button():
         app_ws = create_workspace(at.session_state["session_id"])
         set_active_workspace(app_ws)
 
-        # Seed 1 proposal in active workspace
-        propose_budget_change("Dining", 320.0)
+        # Seed 1 proposal in active workspace expiring soon so alert action is Open Inbox
+        now = datetime.now()
+        prop_raw = propose_budget_change("Dining", 320.0)
+        p_id = json.loads(prop_raw)["proposal_id"]
+        exp = (now + timedelta(minutes=30)).isoformat()
+        props = read_proposals(workspace=app_ws)
+        props[p_id]["expires_at"] = exp
+        save_proposal(props[p_id], workspace=app_ws)
+        if PROPOSALS_PATH.exists():
+            legacy = json.loads(PROPOSALS_PATH.read_text("utf-8"))
+            if p_id in legacy:
+                legacy[p_id]["expires_at"] = exp
+                PROPOSALS_PATH.write_text(json.dumps(legacy), "utf-8")
 
         # Rerun AppTest with proposal present
         at.run()
