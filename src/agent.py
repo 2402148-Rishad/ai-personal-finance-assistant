@@ -10,7 +10,7 @@ from typing import Any
 from google import genai
 from google.genai import types
 
-from src.config import MODEL, FINANCE_FALLBACK_MODEL, MAX_AGENT_STEPS, get_api_key
+from src.config import MODEL, FINANCE_FALLBACK_MODEL, MAX_AGENT_STEPS, get_api_key, AS_OF_DATE
 from src.logger import log_event
 from src.permissions import check_permission
 from src.prompts import build_system_prompt
@@ -258,7 +258,10 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
             r"\bbank\s+balance\b",
         ]
         q_lower = question.lower()
-        if any(re.search(pat, q_lower) for pat in out_of_scope_patterns):
+        is_sub_query = bool(re.search(r"\bsubscriptions?\b", q_lower))
+        is_inquiry_pay = bool(re.search(r"\b(which|what|how\s+much|do|did)\b.*\bpay\b", q_lower))
+        is_whatif_cancel = bool(re.search(r"\bwhat\s+if\b.*\bcancel\b", q_lower))
+        if any(re.search(pat, q_lower) for pat in out_of_scope_patterns) and not (is_sub_query or is_inquiry_pay or is_whatif_cancel):
             fixed_answer = "I can't move money or connect to your bank. I can show your simulated sandbox balance and bills."
             log_event("out_of_scope_refusal", {"question": question, "answer": fixed_answer})
             convo_history.append(types.Content(role="user", parts=[types.Part.from_text(text=question)]))
@@ -380,6 +383,9 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
                         clarification_tc = r
                         break
 
+                whatif_tc = next((tc for tc in all_tool_calls if tc.get("name") == "whatif_cashflow"), None)
+                find_sub_tc = next((tc for tc in all_tool_calls if tc.get("name") == "find_subscriptions"), None)
+
                 if clarification_tc:
                     item_label = clarification_tc.get("item_label") or "expense"
                     raw_amt = clarification_tc.get("amount")
@@ -407,6 +413,57 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
 
                     num_list = "\n".join(f"{i+1}. {o}" for i, o in enumerate(opt_list))
                     answer = f"Which category for {item_label} (${amt_str})?\n\n{num_list}"
+                elif whatif_tc:
+                    r = whatif_tc.get("result", {})
+                    if isinstance(r, str):
+                        try:
+                            r = json.loads(r)
+                        except Exception:
+                            r = {}
+                    args = whatif_tc.get("arguments", {}) or {}
+                    if not isinstance(args, dict):
+                        try:
+                            args = dict(args)
+                        except Exception:
+                            args = {}
+                    c_name = r.get("cancel_subscription") or args.get("cancel_subscription") or "that subscription"
+
+                    if r.get("error"):
+                        answer = f"Error simulating cash flow: {r.get('error')}"
+                    elif r.get("status") == "not_found":
+                        known = r.get("known_subscriptions", [])
+                        if known:
+                            answer = f"Subscription '{c_name}' not found. Known subscriptions: {', '.join(known)}."
+                        else:
+                            answer = f"Subscription '{c_name}' not found. Known subscriptions: none."
+                    else:
+                        date_val = r.get("end_date_human") or r.get("end_date") or AS_OF_DATE
+                        scenario_end = float(r.get("scenario_end", 0.0))
+                        baseline_end = float(r.get("baseline_end", 0.0))
+                        diff = float(r.get("difference", 0.0))
+                        diff_sign = "+" if diff >= 0 else "-"
+                        answer = f"With {c_name} cancelled, your balance on {date_val} is ${scenario_end:.2f} instead of ${baseline_end:.2f} ({diff_sign}${abs(diff):.2f})."
+                elif find_sub_tc:
+                    r = find_sub_tc.get("result", {})
+                    if isinstance(r, str):
+                        try:
+                            r = json.loads(r)
+                        except Exception:
+                            r = {}
+                    if r.get("error"):
+                        answer = f"Error finding subscriptions: {r.get('error')}"
+                    else:
+                        subs = r.get("subscriptions", [])
+                        total_m = float(r.get("total_monthly", 0.0))
+                        if not subs:
+                            answer = "No subscriptions found. Total: $0.00"
+                        else:
+                            lines = [
+                                f"- {s.get('name')}: ${float(s.get('monthly_cost', 0.0)):.2f}, last charged {s.get('last_charged', '')}"
+                                for s in subs
+                            ]
+                            lines.append(f"Total: ${total_m:.2f}")
+                            answer = "\n".join(lines)
                 else:
                     has_revision = any(
                         tc.get("name") == "revise_proposal" and
@@ -425,6 +482,9 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
                         answer = "Updated. Same card, new values."
                     elif has_creation:
                         answer = "Ready for your OK. Nothing is saved until you approve."
+
+                # Remove any Source line from the answer text - Source goes only into 'How I got this'
+                answer = re.sub(r'(?i)\n*\bSource:\s*.*$', '', answer).strip()
 
                 # 2.5) final_answer: log the answer text
                 log_event("final_answer", {"answer": answer})

@@ -3057,6 +3057,36 @@ def whatif_cashflow(
         if workspace is not None:
             active_token = store.set_active_workspace(workspace)
         try:
+            from src.formatters import format_date_human
+
+            matched_sub = None
+            canonical_name = None
+            if cancel_name:
+                subs_raw = find_subscriptions(workspace=workspace)
+                subs_data = json.loads(subs_raw) if isinstance(subs_raw, str) else subs_raw
+                known_subs = subs_data.get("subscriptions", [])
+                known_names = [str(s.get("name", "")).strip() for s in known_subs if s.get("name")]
+
+                c_clean = cancel_name.strip().lower()
+                # 1. Exact case-insensitive match
+                matches = [s for s in known_subs if str(s.get("name", "")).strip().lower() == c_clean]
+                # 2. If no exact match, try unique substring match
+                if not matches:
+                    matches = [
+                        s for s in known_subs
+                        if c_clean in str(s.get("name", "")).strip().lower() or str(s.get("name", "")).strip().lower() in c_clean
+                    ]
+
+                if len(matches) != 1:
+                    return JsonDict({
+                        "status": "not_found",
+                        "known_subscriptions": known_names,
+                        "message": f"Subscription '{cancel_name}' not found. Known subscriptions: {', '.join(known_names)}",
+                    })
+
+                matched_sub = matches[0]
+                canonical_name = str(matched_sub.get("name", ""))
+
             baseline_raw = cashflow_projection(days_ahead=days_ahead, today=today)
             baseline = json.loads(baseline_raw)
             if "error" in baseline:
@@ -3070,16 +3100,22 @@ def whatif_cashflow(
             avg_daily_discretionary_spend = float(baseline.get("avg_daily_discretionary_spend", 0.0))
             as_of = str(baseline.get("as_of", today or AS_OF_DATE))
             today_dt = date.fromisoformat(as_of)
+            end_dt = today_dt + timedelta(days=days_ahead)
+            end_date_iso = end_dt.isoformat()
+            end_date_human = format_date_human(end_date_iso)
 
             # With no changes, difference must be exactly 0
             if not cancel_name and abs(exp_change) < 1e-6 and abs(inc_change) < 1e-6:
                 res = {
+                    "status": "ok",
                     "baseline_end": baseline_end,
                     "scenario_end": baseline_end,
                     "difference": 0.0,
                     "lowest_balance": baseline_low,
                     "lowest_balance_date": baseline_low_date,
                     "date_of_low": baseline_low_date,
+                    "end_date": end_date_iso,
+                    "end_date_human": end_date_human,
                 }
                 return JsonDict(res)
 
@@ -3089,13 +3125,13 @@ def whatif_cashflow(
             scenario_bills_by_date = {}
             cancelled_charges_by_date = {}
 
-            c_lower = cancel_name.lower() if cancel_name else ""
+            c_lower = canonical_name.lower().strip() if canonical_name else ""
             matched_in_scheduled = False
 
-            if cancel_name:
+            if cancel_name and canonical_name:
                 for b in scheduled_bills:
                     b_name = str(b.get("name", "")).strip().lower()
-                    if c_lower in b_name or b_name in c_lower:
+                    if b_name == c_lower or b_name in c_lower or c_lower in b_name:
                         matched_in_scheduled = True
                         cancelled_charges_by_date.setdefault(b["due_date"], 0.0)
                         cancelled_charges_by_date[b["due_date"]] += float(b["amount"])
@@ -3107,27 +3143,21 @@ def whatif_cashflow(
                     scenario_bills_by_date.setdefault(b["due_date"], 0.0)
                     scenario_bills_by_date[b["due_date"]] += float(b["amount"])
 
-            if cancel_name and not matched_in_scheduled:
-                subs_raw = find_subscriptions(workspace=workspace)
-                subs_data = json.loads(subs_raw) if isinstance(subs_raw, str) else subs_data
-                for s in subs_data.get("subscriptions", []):
-                    s_name = str(s.get("name", "")).strip().lower()
-                    if c_lower in s_name or s_name in c_lower:
-                        m_cost = float(s.get("monthly_cost", 0.0))
-                        last_ch = str(s.get("last_charged", ""))
-                        try:
-                            dt_last = datetime.strptime(last_ch, "%d %b %Y")
-                            ch_day = dt_last.day
-                        except Exception:
-                            ch_day = 1
-                        for offset in range(days_ahead + 1):
-                            target_dt = today_dt + timedelta(days=offset)
-                            max_day = calendar.monthrange(target_dt.year, target_dt.month)[1]
-                            clamped_day = min(ch_day, max_day)
-                            if target_dt.day == clamped_day and offset > 0:
-                                cancelled_charges_by_date.setdefault(target_dt.isoformat(), 0.0)
-                                cancelled_charges_by_date[target_dt.isoformat()] += m_cost
-                        break
+            if cancel_name and not matched_in_scheduled and matched_sub:
+                m_cost = float(matched_sub.get("monthly_cost", 0.0))
+                last_ch = str(matched_sub.get("last_charged", ""))
+                try:
+                    dt_last = datetime.strptime(last_ch, "%d %b %Y")
+                    ch_day = dt_last.day
+                except Exception:
+                    ch_day = 1
+                for offset in range(1, days_ahead + 1):
+                    target_dt = today_dt + timedelta(days=offset)
+                    max_day = calendar.monthrange(target_dt.year, target_dt.month)[1]
+                    clamped_day = min(ch_day, max_day)
+                    if target_dt.day == clamped_day:
+                        cancelled_charges_by_date.setdefault(target_dt.isoformat(), 0.0)
+                        cancelled_charges_by_date[target_dt.isoformat()] += m_cost
 
             # Income by date for scenario
             income_tx = df[df["type"] == "income"].sort_values("date") if not df.empty and "type" in df.columns else pd.DataFrame()
@@ -3186,14 +3216,22 @@ def whatif_cashflow(
             if abs(difference) < 1e-6:
                 difference = 0.0
 
+            removed_amount = round(sum(cancelled_charges_by_date.values()), 2) if cancel_name else 0.0
+
             res = {
+                "status": "ok",
                 "baseline_end": baseline_end,
                 "scenario_end": scenario_end,
                 "difference": difference,
                 "lowest_balance": lowest_balance,
                 "lowest_balance_date": lowest_balance_date,
                 "date_of_low": lowest_balance_date,
+                "end_date": end_date_iso,
+                "end_date_human": end_date_human,
             }
+            if cancel_name:
+                res["cancel_subscription"] = canonical_name
+                res["removed_amount"] = removed_amount
             return JsonDict(res)
         finally:
             if active_token is not None:
