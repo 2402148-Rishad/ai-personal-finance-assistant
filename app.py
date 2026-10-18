@@ -1,4 +1,11 @@
 import json
+import sys
+from pathlib import Path
+
+_fa_dir = str(Path(__file__).resolve().parent / "finance_agent")
+if _fa_dir not in sys.path:
+    sys.path.insert(0, _fa_dir)
+
 import plotly.graph_objects as go
 import streamlit as st
 

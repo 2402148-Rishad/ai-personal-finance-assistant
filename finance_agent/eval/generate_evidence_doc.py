@@ -190,14 +190,10 @@ def main():
 
     content = "\n".join(out) + "\n"
 
-    # Only write to docs/evidence/README.md if FINANCE_WRITE_EVIDENCE=1
-    if os.environ.get("FINANCE_WRITE_EVIDENCE") == "1":
-        dest = ROOT / "docs" / "evidence" / "README.md"
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(content, encoding="utf-8")
-        print(f"Successfully generated {dest} (FINANCE_WRITE_EVIDENCE=1)")
-    else:
-        print("FINANCE_WRITE_EVIDENCE=1 not set; skipped writing docs/evidence/README.md")
+    dest = ROOT / "docs" / "evidence" / "README.md"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(content, encoding="utf-8")
+    print(f"Successfully generated {dest}")
 
 if __name__ == "__main__":
     main()
