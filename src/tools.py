@@ -123,7 +123,8 @@ def truncate_tool_result(data: dict) -> dict:
 
     row_keys = [
         "transactions", "upcoming_bills", "duplicate_groups",
-        "recommendations", "spikes", "scheduled_bills", "items", "rows"
+        "recommendations", "spikes", "scheduled_bills", "items", "rows",
+        "subscriptions"
     ]
     target_key = next((k for k in row_keys if k in data and isinstance(data[k], list)), None)
     if not target_key:
@@ -2930,6 +2931,314 @@ def propose_preference_change(
         return json.dumps({"error": str(e), "status": "error"})
 
 
+def _is_recurring_monthly(dates: list[date], amounts: list[float]) -> bool:
+    """Check if there is a subsequence of at least 3 charges at roughly monthly intervals
+    (25-35 days apart) with similar amounts (within 10%).
+    """
+    if len(dates) < 3 or len(amounts) < 3:
+        return False
+
+    n = len(dates)
+    for i in range(n - 2):
+        window_len = 1
+        for j in range(i, n - 1):
+            day_gap = (dates[j + 1] - dates[j]).days
+            if not (25 <= day_gap <= 35):
+                break
+            a1 = amounts[j]
+            a2 = amounts[j + 1]
+            max_a = max(a1, a2)
+            if max_a > 0 and (abs(a2 - a1) / max_a) > 0.10:
+                break
+            window_len += 1
+            if window_len >= 3:
+                return True
+    return False
+
+
+def find_subscriptions(workspace: Path | str | None = None) -> str:
+    """Find recurring subscriptions and charges in transactions.
+    A charge is a subscription if the same merchant or description repeats at roughly monthly intervals
+    (25-35 days apart) at least 3 times with a similar amount (within 10%), or if it sits in the Subscriptions category.
+    Returns name, monthly_cost, last_charged (human date), months_seen and total_monthly.
+    Plain text, no IDs. A one-off purchase is never flagged. Reuse existing transaction reads in store.py.
+    """
+    try:
+        from src.formatters import format_date_human
+        target_dir = Path(workspace).resolve() if workspace is not None else store.get_data_dir()
+        t_path = target_dir / "transactions.csv"
+        if not t_path.exists():
+            return JsonDict({"subscriptions": [], "total_monthly": 0.0, "count": 0})
+
+        df = store.read_csv("transactions.csv", workspace=target_dir)
+        if df.empty or "type" not in df.columns or "amount" not in df.columns:
+            return JsonDict({"subscriptions": [], "total_monthly": 0.0, "count": 0})
+
+        exp_df = df[df["type"] == "expense"].copy()
+        if exp_df.empty:
+            return JsonDict({"subscriptions": [], "total_monthly": 0.0, "count": 0})
+
+        exp_df["date_dt"] = pd.to_datetime(exp_df["date"], errors="coerce")
+        exp_df = exp_df.dropna(subset=["date_dt"])
+
+        def _get_item_name(r):
+            m = r.get("merchant")
+            if pd.notna(m) and str(m).strip():
+                return sanitize_description(m)
+            d = r.get("description")
+            if pd.notna(d) and str(d).strip():
+                return sanitize_description(d)
+            return "Unknown"
+
+        exp_df["item_name"] = exp_df.apply(_get_item_name, axis=1)
+
+        subscriptions = []
+        for item_name, grp in exp_df.groupby("item_name"):
+            # A one-off purchase is never flagged
+            if len(grp) < 2:
+                continue
+
+            grp = grp.sort_values("date_dt")
+            is_sub_cat = any(str(c).strip().lower() == "subscriptions" for c in grp.get("category", []))
+
+            dates = [d.date() if hasattr(d, "date") else d for d in grp["date_dt"].tolist()]
+            amts = [float(a) for a in grp["amount"].tolist()]
+            repeats_monthly = _is_recurring_monthly(dates, amts)
+
+            if is_sub_cat or repeats_monthly:
+                last_row = grp.iloc[-1]
+                last_dt_str = str(last_row["date"])
+                human_last = format_date_human(last_dt_str)
+                m_cost = round(float(last_row["amount"]), 2)
+                months_seen = len(set(str(d)[:7] for d in grp["date"].dropna()))
+                subscriptions.append({
+                    "name": item_name,
+                    "monthly_cost": m_cost,
+                    "last_charged": human_last,
+                    "months_seen": months_seen,
+                })
+
+        subscriptions.sort(key=lambda s: str(s.get("name", "")).lower())
+        total_monthly = round(sum(s["monthly_cost"] for s in subscriptions), 2)
+        res = {
+            "subscriptions": subscriptions,
+            "total_monthly": total_monthly,
+            "count": len(subscriptions),
+        }
+        return JsonDict(truncate_tool_result(res))
+    except Exception as e:
+        return JsonDict({"error": str(e), "subscriptions": [], "total_monthly": 0.0, "count": 0})
+
+
+def whatif_cashflow(
+    cancel_subscription: str | None = None,
+    monthly_expense_change: float | int | None = None,
+    monthly_income_change: float | int | None = None,
+    days_ahead: int = 30,
+    today: str | None = None,
+    workspace: Path | str | None = None,
+) -> str:
+    """Simulate a what-if cash flow scenario over a forward horizon.
+    Reuses cashflow_projection for the baseline and returns baseline_end, scenario_end,
+    difference, lowest_balance, and the date of that low (date_of_low / lowest_balance_date).
+    With no changes, difference must be exactly 0. Never writes to ledger or proposals.
+    """
+    try:
+        try:
+            days_ahead = int(days_ahead) if days_ahead is not None else 30
+        except (ValueError, TypeError):
+            days_ahead = 30
+
+        exp_change = float(monthly_expense_change) if monthly_expense_change is not None else 0.0
+        inc_change = float(monthly_income_change) if monthly_income_change is not None else 0.0
+        cancel_name = str(cancel_subscription).strip() if cancel_subscription is not None and str(cancel_subscription).strip() else None
+
+        active_token = None
+        if workspace is not None:
+            active_token = store.set_active_workspace(workspace)
+        try:
+            baseline_raw = cashflow_projection(days_ahead=days_ahead, today=today)
+            baseline = json.loads(baseline_raw)
+            if "error" in baseline:
+                return JsonDict(baseline)
+
+            baseline_end = round(float(baseline.get("projected_end_balance", 0.0)), 2)
+            baseline_low = round(float(baseline.get("lowest_balance", 0.0)), 2)
+            baseline_low_date = str(baseline.get("lowest_balance_date", today or AS_OF_DATE))
+            scheduled_bills = baseline.get("scheduled_bills", [])
+            simulated_sandbox_balance = float(baseline.get("simulated_sandbox_balance", 0.0))
+            avg_daily_discretionary_spend = float(baseline.get("avg_daily_discretionary_spend", 0.0))
+            as_of = str(baseline.get("as_of", today or AS_OF_DATE))
+            today_dt = date.fromisoformat(as_of)
+
+            # With no changes, difference must be exactly 0
+            if not cancel_name and abs(exp_change) < 1e-6 and abs(inc_change) < 1e-6:
+                res = {
+                    "baseline_end": baseline_end,
+                    "scenario_end": baseline_end,
+                    "difference": 0.0,
+                    "lowest_balance": baseline_low,
+                    "lowest_balance_date": baseline_low_date,
+                    "date_of_low": baseline_low_date,
+                }
+                return JsonDict(res)
+
+            target_dir = Path(workspace).resolve() if workspace is not None else store.get_data_dir()
+            df = store.read_csv("transactions.csv", workspace=target_dir)
+
+            scenario_bills_by_date = {}
+            cancelled_charges_by_date = {}
+
+            c_lower = cancel_name.lower() if cancel_name else ""
+            matched_in_scheduled = False
+
+            if cancel_name:
+                for b in scheduled_bills:
+                    b_name = str(b.get("name", "")).strip().lower()
+                    if c_lower in b_name or b_name in c_lower:
+                        matched_in_scheduled = True
+                        cancelled_charges_by_date.setdefault(b["due_date"], 0.0)
+                        cancelled_charges_by_date[b["due_date"]] += float(b["amount"])
+                    else:
+                        scenario_bills_by_date.setdefault(b["due_date"], 0.0)
+                        scenario_bills_by_date[b["due_date"]] += float(b["amount"])
+            else:
+                for b in scheduled_bills:
+                    scenario_bills_by_date.setdefault(b["due_date"], 0.0)
+                    scenario_bills_by_date[b["due_date"]] += float(b["amount"])
+
+            if cancel_name and not matched_in_scheduled:
+                subs_raw = find_subscriptions(workspace=workspace)
+                subs_data = json.loads(subs_raw) if isinstance(subs_raw, str) else subs_data
+                for s in subs_data.get("subscriptions", []):
+                    s_name = str(s.get("name", "")).strip().lower()
+                    if c_lower in s_name or s_name in c_lower:
+                        m_cost = float(s.get("monthly_cost", 0.0))
+                        last_ch = str(s.get("last_charged", ""))
+                        try:
+                            dt_last = datetime.strptime(last_ch, "%d %b %Y")
+                            ch_day = dt_last.day
+                        except Exception:
+                            ch_day = 1
+                        for offset in range(days_ahead + 1):
+                            target_dt = today_dt + timedelta(days=offset)
+                            max_day = calendar.monthrange(target_dt.year, target_dt.month)[1]
+                            clamped_day = min(ch_day, max_day)
+                            if target_dt.day == clamped_day and offset > 0:
+                                cancelled_charges_by_date.setdefault(target_dt.isoformat(), 0.0)
+                                cancelled_charges_by_date[target_dt.isoformat()] += m_cost
+                        break
+
+            # Income by date for scenario
+            income_tx = df[df["type"] == "income"].sort_values("date") if not df.empty and "type" in df.columns else pd.DataFrame()
+            if income_tx.empty:
+                pay_day = 1
+                avg_monthly_income = 0.0
+            else:
+                most_recent_inc = income_tx.iloc[-1]
+                pay_day = int(str(most_recent_inc["date"]).split("-")[2])
+                monthly_incomes = income_tx.groupby("month")["amount"].sum()
+                avg_monthly_income = round(float(monthly_incomes.mean()), 2)
+
+            scenario_income_by_date = {}
+            for offset in range(days_ahead + 1):
+                target_dt = today_dt + timedelta(days=offset)
+                if target_dt.day == pay_day and offset > 0:
+                    scenario_income_by_date[target_dt.isoformat()] = avg_monthly_income + inc_change
+
+            daily_income_spread = 0.0
+            if inc_change and not scenario_income_by_date:
+                daily_income_spread = inc_change / 30.0
+
+            scenario_daily_spend = avg_daily_discretionary_spend + (exp_change / 30.0)
+
+            current_balance = simulated_sandbox_balance
+            lowest_balance = current_balance
+            lowest_balance_date = today_dt.isoformat()
+
+            if today_dt.isoformat() in scenario_bills_by_date:
+                current_balance = round(current_balance - scenario_bills_by_date[today_dt.isoformat()], 2)
+                if current_balance < lowest_balance:
+                    lowest_balance = current_balance
+                    lowest_balance_date = today_dt.isoformat()
+
+            for offset in range(1, days_ahead + 1):
+                current_dt = today_dt + timedelta(days=offset)
+                date_str = current_dt.isoformat()
+
+                if date_str in scenario_income_by_date:
+                    current_balance = round(current_balance + scenario_income_by_date[date_str], 2)
+                if daily_income_spread:
+                    current_balance = round(current_balance + daily_income_spread, 2)
+                if date_str in scenario_bills_by_date:
+                    current_balance = round(current_balance - scenario_bills_by_date[date_str], 2)
+                if date_str in cancelled_charges_by_date and not matched_in_scheduled:
+                    current_balance = round(current_balance + cancelled_charges_by_date[date_str], 2)
+
+                current_balance = round(current_balance - scenario_daily_spend, 2)
+
+                if current_balance < lowest_balance:
+                    lowest_balance = current_balance
+                    lowest_balance_date = date_str
+
+            scenario_end = round(current_balance, 2)
+            difference = round(scenario_end - baseline_end, 2)
+            if abs(difference) < 1e-6:
+                difference = 0.0
+
+            res = {
+                "baseline_end": baseline_end,
+                "scenario_end": scenario_end,
+                "difference": difference,
+                "lowest_balance": lowest_balance,
+                "lowest_balance_date": lowest_balance_date,
+                "date_of_low": lowest_balance_date,
+            }
+            return JsonDict(res)
+        finally:
+            if active_token is not None:
+                store.set_active_workspace(None)
+
+    except Exception as e:
+        return JsonDict({"error": str(e)})
+
+
+FIND_SUBSCRIPTIONS_SCHEMA = {
+    "name": "find_subscriptions",
+    "description": "Find recurring subscriptions and charges in transactions. Returns name, monthly_cost, last_charged (human date), months_seen, and total_monthly. Plain text, no IDs. A one-off purchase is never flagged.",
+    "parameters": {
+        "type": "object",
+        "properties": {},
+    },
+}
+
+WHATIF_CASHFLOW_SCHEMA = {
+    "name": "whatif_cashflow",
+    "description": "Simulate a what-if cash flow scenario over a forward horizon. Reuses cashflow_projection for the baseline. Arguments: cancel_subscription (name, optional), monthly_expense_change (number, optional), monthly_income_change (number, optional), days_ahead (default 30). Returns baseline_end, scenario_end, difference, lowest_balance, and date_of_low. With no changes, difference is exactly 0. Never writes to ledger or proposals.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "cancel_subscription": {
+                "type": "string",
+                "description": "Name of a recurring subscription or bill to simulate cancelling.",
+            },
+            "monthly_expense_change": {
+                "type": "number",
+                "description": "Monthly expense change amount in USD (positive to increase expenses, negative to reduce).",
+            },
+            "monthly_income_change": {
+                "type": "number",
+                "description": "Monthly income change amount in USD.",
+            },
+            "days_ahead": {
+                "type": "integer",
+                "description": "Forward projection horizon in days (default 30).",
+            },
+        },
+    },
+}
+
+
 LIST_GOALS_SCHEMA = {
     "name": "list_goals",
     "description": "List all active financial goals from the workspace. Returns id, name, target_amount, target_date, saved_so_far, and created date.",
@@ -3034,6 +3343,8 @@ TOOL_SCHEMAS = [
     GET_GOAL_PROGRESS_SCHEMA,
     PROPOSE_GOAL_SCHEMA,
     PROPOSE_PREFERENCE_CHANGE_SCHEMA,
+    FIND_SUBSCRIPTIONS_SCHEMA,
+    WHATIF_CASHFLOW_SCHEMA,
 ]
 
 TOOLS_BY_NAME = {
@@ -3057,6 +3368,8 @@ TOOLS_BY_NAME = {
     "get_goal_progress": get_goal_progress,
     "propose_goal": propose_goal,
     "propose_preference_change": propose_preference_change,
+    "find_subscriptions": find_subscriptions,
+    "whatif_cashflow": whatif_cashflow,
 }
 
 

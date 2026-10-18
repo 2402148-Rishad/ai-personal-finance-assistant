@@ -44,6 +44,8 @@ from src.tools import (
     propose_preference_change,
     list_goals,
     get_goal_progress,
+    find_subscriptions,
+    whatif_cashflow,
 )
 from src.validators import (
     validate_date,
@@ -453,6 +455,8 @@ with left_col:
                                     "upcoming_bills",
                                     "cashflow_projection",
                                     "get_data_overview",
+                                    "find_subscriptions",
+                                    "whatif_cashflow",
                                 }
                                 has_read_data = any(tc.get("name") in READ_DATA_TOOLS for tc in tool_calls)
                                 has_proposal = bool(item.get("proposal_ids"))
@@ -1474,6 +1478,33 @@ with right_col:
                         st.rerun()
             else:
                 st.caption("No bills available to cancel.")
+
+        st.divider()
+
+        # Subscriptions
+        st.markdown("### Subscriptions")
+        subs_raw = find_subscriptions(workspace=session_ws)
+        subs_data = json.loads(subs_raw) if isinstance(subs_raw, str) else subs_raw
+        subs_list = subs_data.get("subscriptions", [])
+        total_monthly_subs = float(subs_data.get("total_monthly", 0.0))
+
+        with st.container(border=True):
+            if not subs_list:
+                st.caption("No recurring subscriptions found.")
+            else:
+                for s in subs_list:
+                    s_name = escape_dollars(str(s.get("name", "Subscription")))
+                    s_cost = float(s.get("monthly_cost", 0.0))
+                    s_last = str(s.get("last_charged", ""))
+                    c_s1, c_s2 = st.columns([3, 2])
+                    with c_s1:
+                        st.markdown(f"**{s_name}**")
+                        if s_last:
+                            st.caption(f"Last charged: {s_last}")
+                    with c_s2:
+                        st.markdown(f"**${s_cost:,.2f}** / month")
+                st.divider()
+                st.markdown(f"**Total:** ${total_monthly_subs:,.2f} / month")
 
         st.divider()
 

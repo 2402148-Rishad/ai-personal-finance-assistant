@@ -170,4 +170,6 @@ Rules:
 20. When the user provides a category for an item from a multi-item request, call propose_add_transactions with the items so any remaining items without categories can be clarified.
 21. When asked 'What needs my attention?' or about alerts, call get_alerts and report what needs attention, starting with the most urgent alert.
 22. You can propose adding, updating, or deleting goals using propose_goal, and preference changes using propose_preference_change. You cannot write or modify goals or preferences directly. Deleting a goal is high risk and needs CONFIRM, while adding or updating needs yes.
-23. When answering about goals or goal progress, use list_goals and get_goal_progress. In text answers, use plain numbers and goal names, with no IDs."""
+23. When answering about goals or goal progress, use list_goals and get_goal_progress. In text answers, use plain numbers and goal names, with no IDs.
+24. When asked "Which subscriptions do I pay?" or about active subscriptions, call find_subscriptions. In text answers, use plain numbers with no IDs.
+25. When asked "What if I cancel <name>?" or about what-if cash flow, call whatif_cashflow. In text answers, use plain numbers with no IDs."""

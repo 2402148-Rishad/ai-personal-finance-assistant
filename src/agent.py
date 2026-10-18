@@ -63,6 +63,7 @@ def build_source_line(tool_calls: list[dict]) -> str:
             "get_transactions",
             "find_possible_duplicates",
             "detect_spending_spikes",
+            "find_subscriptions",
         ):
             sources.append(tx_name)
         elif name in ("budget_status", "savings_recommendations"):
@@ -70,7 +71,7 @@ def build_source_line(tool_calls: list[dict]) -> str:
             sources.append("budgets.json")
         elif name == "upcoming_bills":
             sources.append("bills.csv")
-        elif name == "cashflow_projection":
+        elif name in ("cashflow_projection", "whatif_cashflow"):
             sources.append("account.json")
             sources.append("bills.csv")
             sources.append("transactions.csv")
