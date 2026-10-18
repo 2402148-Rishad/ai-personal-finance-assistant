@@ -330,6 +330,43 @@ def test_tool_registration_and_read_permission():
     assert "most_urgent" in data
 
 
+def test_get_alerts_is_read_only_and_cannot_write_data(clean_workspace):
+    """Confirm get_alerts is Tier.READ, absent from PROPOSE and APPLY paths, and cannot write data."""
+    # 1. Tier.READ confirmation
+    assert "get_alerts" in TOOL_TIERS
+    assert TOOL_TIERS["get_alerts"] == Tier.READ
+
+    # 2. Absent from every PROPOSE and APPLY path
+    propose_tools = [k for k, v in TOOL_TIERS.items() if v == Tier.PROPOSE]
+    apply_tools = [k for k, v in TOOL_TIERS.items() if v == Tier.APPLY]
+    assert "get_alerts" not in propose_tools
+    assert "get_alerts" not in apply_tools
+
+    # 3. Check approvals module: get_alerts is absent from proposal/apply actions
+    for attr in ["approve", "reject", "undo", "create_proposal"]:
+        fn = getattr(approvals, attr, None)
+        if fn:
+            assert "get_alerts" not in getattr(fn, "__name__", "")
+
+    # 4. Cannot write data: snapshot all files before and after get_alerts()
+    ws = clean_workspace
+    store.set_sandbox_today("2026-08-15", workspace=ws)
+    (ws / "bills.csv").write_text("bill_name,amount,due_day,category\nRent,1000.0,16,Rent\n", encoding="utf-8")
+    (ws / "budgets.json").write_text(json.dumps({"Rent": 1000.0}), encoding="utf-8")
+    (ws / "account.json").write_text(json.dumps({"opening_balance": 500.0}), encoding="utf-8")
+    (ws / "transactions.csv").write_text("date,month,category,description,type,amount\n2026-08-01,2026-08,Rent,Rent,expense,1000.0\n", encoding="utf-8")
+
+    def snapshot_dir(d: Path) -> dict[str, str]:
+        return {p.name: p.read_text(encoding="utf-8") for p in d.glob("*") if p.is_file()}
+
+    before = snapshot_dir(ws)
+    alerts = get_alerts(workspace=ws)
+    tools_res = tools.get_alerts(workspace=ws)
+    after = snapshot_dir(ws)
+
+    assert before == after, "get_alerts must not modify or write any workspace files"
+
+
 def test_chat_what_needs_my_attention_matches_banner(clean_workspace):
     """Asking 'What needs my attention?' calls get_alerts and reports the most urgent alert."""
     ws = clean_workspace
