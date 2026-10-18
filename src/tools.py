@@ -991,7 +991,41 @@ def propose_add_transactions(items: list | str) -> str:
                             other_lbl = str(other_it.get("description") or f"Item {other_idx + 1}").strip().title()
                             pending.append(other_lbl)
 
-                return json.dumps({
+                # Propose any valid items collected so far if not already pending
+                created_p_id = None
+                if validated_items:
+                    try:
+                        pending_props = store.list_pending(workspace=workspace_dir)
+                    except Exception:
+                        pending_props = []
+                    existing_pending_items = []
+                    for p in pending_props:
+                        if p.get("kind") == "add_transactions":
+                            p_items = (p.get("payload") or {}).get("items") or []
+                            for pi in p_items:
+                                existing_pending_items.append((
+                                    str(pi.get("description", "")).strip().lower(),
+                                    round(float(pi.get("amount", 0.0)), 2),
+                                ))
+                    items_to_propose = [
+                        vi for vi in validated_items
+                        if (str(vi.get("description", "")).strip().lower(), round(float(vi.get("amount", 0.0)), 2)) not in existing_pending_items
+                    ]
+                    if items_to_propose:
+                        preview = {"before": None, "after": items_to_propose}
+                        created_p_id = f"prop_{uuid.uuid4().hex[:8]}"
+                        proposal = store.create_proposal(
+                            kind="add_transactions",
+                            payload={"items": items_to_propose},
+                            preview=preview,
+                            risk="low",
+                            workspace=workspace_dir,
+                            proposal_id=created_p_id,
+                        )
+                        _sync_legacy_proposals(created_p_id, proposal)
+                        log_event("transactions_proposed", {"proposal_id": created_p_id, "count": len(items_to_propose), "risk": "low"})
+
+                res = {
                     "status": "needs_clarification",
                     "missing": ["category"],
                     "item_label": item_label,
@@ -999,7 +1033,10 @@ def propose_add_transactions(items: list | str) -> str:
                     "options": {"category": options_list},
                     "pending": pending,
                     "message": f"Which category for {item_label} (${amt_clean})?",
-                })
+                }
+                if created_p_id:
+                    res["proposal_id"] = created_p_id
+                return json.dumps(res)
 
             # Check other missing fields
             missing_fields = []
@@ -1096,9 +1133,28 @@ def propose_add_transactions(items: list | str) -> str:
             }
             validated_items.append(validated_item)
 
+        try:
+            pending_props = store.list_pending(workspace=workspace_dir)
+        except Exception:
+            pending_props = []
+        existing_pending_items = []
+        for p in pending_props:
+            if p.get("kind") == "add_transactions":
+                p_items = (p.get("payload") or {}).get("items") or []
+                for pi in p_items:
+                    existing_pending_items.append((
+                        str(pi.get("description", "")).strip().lower(),
+                        round(float(pi.get("amount", 0.0)), 2),
+                    ))
+        unproposed_items = [
+            vi for vi in validated_items
+            if (str(vi.get("description", "")).strip().lower(), round(float(vi.get("amount", 0.0)), 2)) not in existing_pending_items
+        ]
+        items_to_save = unproposed_items if unproposed_items else validated_items
+
         preview = {
             "before": None,
-            "after": validated_items,
+            "after": items_to_save,
         }
         if has_duplicate:
             preview["possible_duplicate"] = True
@@ -1109,7 +1165,7 @@ def propose_add_transactions(items: list | str) -> str:
         proposal_id = f"prop_{uuid.uuid4().hex[:8]}"
         proposal = store.create_proposal(
             kind="add_transactions",
-            payload={"items": validated_items},
+            payload={"items": items_to_save},
             preview=preview,
             risk="low",
             workspace=workspace_dir,

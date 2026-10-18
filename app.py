@@ -287,6 +287,14 @@ with left_col:
                         elif isinstance(opts, list):
                             clarification_options.extend([str(o) for o in opts])
 
+            if not clarification_options and getattr(result, "answer", None):
+                m_label = re.search(r"Which category (?:would you like to use )?for ([^($\n?]+)", result.answer, flags=re.I)
+                raw_opts = re.findall(r"^\s*\d+[\.\)]\s*(.+)$", result.answer, flags=re.M)
+                if raw_opts:
+                    clarification_options = [o.strip() for o in raw_opts]
+                    if not clarification_item_label and m_label:
+                        clarification_item_label = m_label.group(1).strip()
+
             created_proposal_ids = list(dict.fromkeys(created_proposal_ids))
             clarification_options = list(dict.fromkeys(clarification_options))
 
@@ -425,14 +433,23 @@ with left_col:
 
                         # Task 2: Clarification options as full-width buttons in one column
                         clarifications = item.get("clarification_options", [])
+                        item_lbl = item.get("clarification_item_label")
+                        if not clarifications and a_text:
+                            raw_opts = re.findall(r"^\s*\d+[\.\)]\s*(.+)$", a_text, flags=re.M)
+                            if raw_opts and ("Which category" in a_text or "category" in a_text.lower()):
+                                clarifications = [o.strip() for o in raw_opts]
+                                if not item_lbl:
+                                    m_label = re.search(r"Which category (?:would you like to use )?for ([^($\n?]+)", a_text, flags=re.I)
+                                    item_lbl = m_label.group(1).strip() if m_label else None
+
                         if clarifications:
                             st.write("**Clarification:**")
-                            item_lbl = item.get("clarification_item_label")
                             if not item_lbl:
-                                m = re.search(r"Which category for ([^($\n]+)", a_text, flags=re.I)
+                                m = re.search(r"Which category (?:would you like to use )?for ([^($\n?]+)", a_text, flags=re.I)
                                 item_lbl = m.group(1).strip() if m else None
 
                             is_disabled = item.get("clarification_disabled", False)
+                            clean_lbl = re.sub(r"[^a-zA-Z0-9_]", "_", str(item_lbl or "item")).lower()
                             for c_idx, opt_str in enumerate(clarifications):
                                 if opt_str in ("Add anyway", "Cancel"):
                                     btn_lbl = opt_str
@@ -453,7 +470,7 @@ with left_col:
 
                                 st.button(
                                     btn_lbl,
-                                    key=f"clarify_{msg_idx}_{c_idx}",
+                                    key=f"clarify_{msg_idx}_{clean_lbl}_{c_idx}",
                                     use_container_width=True,
                                     disabled=is_disabled,
                                     on_click=_make_on_click(item, send_val),

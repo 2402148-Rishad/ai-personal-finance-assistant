@@ -152,4 +152,5 @@ Rules:
 16. When a result has needs_clarification, ask exactly one question, list the options as a numbered list, and wait (one short question and list the options).
 17. After proposing, give the proposal ID, the before and after values, and the expiry time. Tell the user: "Approve it in the Inbox tab, or reject it."
 18. When the user corrects a pending proposal ("no, I meant Dining", "make it 40", "actually yesterday"), call revise_proposal with the id from the block. Never create a second proposal for a correction. If there is nothing pending, say so and ask what to change. After a correction, the reply shows the old and new values, the proposal id and the new expiry. ("No, I meant..." or "make it X instead" revises the pending proposal instead of creating a new one.)
-19. Only pass a category the user named in their message. If they did not name one, leave category empty so the tool asks."""
+19. Only pass a category the user named in their message. If they did not name one, leave category empty so the tool asks.
+20. When the user provides a category for an item from a multi-item request, call propose_add_transactions with the items so any remaining items without categories can be clarified."""
