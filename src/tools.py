@@ -2624,6 +2624,388 @@ GET_ALERTS_SCHEMA = {
     },
 }
 
+def list_goals(workspace: Path | str | None = None) -> str:
+    """Read and return all active financial goals from the workspace."""
+    try:
+        goals = store.get_goals(workspace=workspace)
+        return json.dumps({
+            "goals": goals,
+            "count": len(goals),
+        })
+    except Exception as e:
+        return json.dumps({"error": str(e), "goals": [], "count": 0})
+
+
+def get_goal_progress(goal_id: str, workspace: Path | str | None = None) -> str:
+    """Calculate progress for a specific goal by ID.
+    Returns percent_done, monthly_needed (target minus saved spread over remaining months from sandbox date),
+    and on_track status. Text answers use plain numbers, with no IDs.
+    """
+    try:
+        goals = store.get_goals(workspace=workspace)
+        target_goal = None
+        for g in goals:
+            if str(g.get("id")) == str(goal_id).strip():
+                target_goal = g
+                break
+        if not target_goal:
+            return json.dumps({"error": f"Goal '{goal_id}' not found.", "status": "error"})
+
+        target_amt = float(target_goal.get("target_amount", 0.0))
+        saved_amt = float(target_goal.get("saved_so_far", 0.0))
+        t_date_str = str(target_goal.get("target_date", "")).strip()
+
+        # percent_done
+        if target_amt <= 0:
+            percent_done = 0.0
+        else:
+            percent_done = round((saved_amt / target_amt) * 100.0, 1)
+
+        # remaining
+        remaining = max(0.0, target_amt - saved_amt)
+
+        # monthly_needed
+        s_date_str = store.get_sandbox_today(workspace=workspace)
+        try:
+            s_date = date.fromisoformat(s_date_str)
+            t_date = date.fromisoformat(t_date_str)
+        except Exception:
+            s_date = date(2026, 8, 31)
+            t_date = date.fromisoformat(t_date_str) if t_date_str else s_date
+
+        months_left = (t_date.year - s_date.year) * 12 + (t_date.month - s_date.month)
+        if months_left <= 0:
+            if t_date >= s_date:
+                months_left = 1
+            else:
+                months_left = 0
+
+        if months_left > 0:
+            monthly_needed = round(remaining / months_left, 2)
+        else:
+            monthly_needed = round(remaining, 2)
+
+        # on_track
+        if saved_amt >= target_amt:
+            on_track = True
+        else:
+            c_date_str = str(target_goal.get("created", s_date_str)).strip()[:10]
+            try:
+                c_date = date.fromisoformat(c_date_str)
+            except Exception:
+                c_date = s_date
+            total_days = (t_date - c_date).days
+            elapsed_days = (s_date - c_date).days
+            if total_days <= 0:
+                on_track = (saved_amt >= target_amt)
+            elif elapsed_days <= 0:
+                on_track = True
+            else:
+                expected_saved = (elapsed_days / total_days) * target_amt
+                on_track = bool(saved_amt >= expected_saved)
+
+        return json.dumps({
+            "goal_name": target_goal.get("name", "Goal"),
+            "target_amount": target_amt,
+            "target_date": t_date_str,
+            "saved_so_far": saved_amt,
+            "percent_done": percent_done,
+            "monthly_needed": monthly_needed,
+            "months_left": months_left,
+            "on_track": on_track,
+        })
+    except Exception as e:
+        return json.dumps({"error": str(e), "status": "error"})
+
+
+def propose_goal(
+    action: str,
+    name: str | None = None,
+    target_amount: float | None = None,
+    target_date: str | None = None,
+    saved_so_far: float | None = None,
+    goal_id: str | None = None,
+    workspace: Path | str | None = None,
+) -> str:
+    """Propose adding, updating, or deleting a savings goal.
+    Actions:
+      - 'add': requires name, target_amount, target_date. Optional saved_so_far. Risk is 'low' (needs 'yes').
+      - 'update': requires goal_id, plus updated fields. Risk is 'low' (needs 'yes').
+      - 'delete': requires goal_id. Risk is 'high' (needs 'CONFIRM').
+    """
+    try:
+        from src.validators import validate_goal
+        action_clean = str(action).strip().lower()
+        if action_clean not in ("add", "update", "delete"):
+            return json.dumps({
+                "error": f"Invalid action '{action}'. Must be 'add', 'update', or 'delete'.",
+                "status": "error",
+            })
+
+        target_dir = Path(workspace).resolve() if workspace is not None else store.get_data_dir()
+        existing_goals = store.get_goals(workspace=target_dir)
+
+        if action_clean == "delete":
+            if not goal_id:
+                return json.dumps({"error": "Goal ID is required for deleting a goal.", "status": "error"})
+            target_goal = next((g for g in existing_goals if str(g.get("id")) == str(goal_id).strip()), None)
+            if not target_goal:
+                return json.dumps({"error": f"Goal '{goal_id}' not found.", "status": "error"})
+
+            proposal_id = f"prop_{uuid.uuid4().hex[:8]}"
+            preview = {
+                "before": target_goal,
+                "after": None,
+            }
+            proposal = store.create_proposal(
+                kind="goal_change",
+                payload={"action": "delete", "goal_id": str(goal_id).strip(), "name": target_goal.get("name")},
+                preview=preview,
+                risk="high",
+                workspace=target_dir,
+                proposal_id=proposal_id,
+            )
+            _sync_legacy_proposals(proposal_id, proposal)
+            log_event("goal_delete_proposed", {"proposal_id": proposal_id, "goal_id": goal_id, "risk": "high"})
+            return json.dumps({
+                "proposal_id": proposal_id,
+                "kind": "goal_change",
+                "action": "delete",
+                "goal_id": str(goal_id).strip(),
+                "preview": preview,
+                "risk": "high",
+                "status": "pending_confirmation",
+                "message": f"Proposal {proposal_id} created to delete goal '{target_goal.get('name')}'. High-risk proposal requires CONFIRM.",
+            })
+
+        elif action_clean == "add":
+            goal_dict = {
+                "name": name,
+                "target_amount": target_amount,
+                "target_date": target_date,
+                "saved_so_far": saved_so_far if saved_so_far is not None else 0.0,
+            }
+            ok, clean_goal = validate_goal(goal_dict, workspace=target_dir, is_update=False)
+            if not ok:
+                return json.dumps({"error": clean_goal, "status": "error"})
+
+            proposal_id = f"prop_{uuid.uuid4().hex[:8]}"
+            preview = {
+                "before": None,
+                "after": clean_goal,
+            }
+            proposal = store.create_proposal(
+                kind="goal_change",
+                payload={"action": "add", "goal": clean_goal, "name": clean_goal["name"]},
+                preview=preview,
+                risk="low",
+                workspace=target_dir,
+                proposal_id=proposal_id,
+            )
+            _sync_legacy_proposals(proposal_id, proposal)
+            log_event("goal_add_proposed", {"proposal_id": proposal_id, "name": clean_goal["name"], "risk": "low"})
+            return json.dumps({
+                "proposal_id": proposal_id,
+                "kind": "goal_change",
+                "action": "add",
+                "goal": clean_goal,
+                "preview": preview,
+                "risk": "low",
+                "status": "pending_confirmation",
+                "message": f"Proposal {proposal_id} created to add goal '{clean_goal['name']}'.",
+            })
+
+        elif action_clean == "update":
+            if not goal_id:
+                return json.dumps({"error": "Goal ID is required for updating a goal.", "status": "error"})
+            target_goal = next((g for g in existing_goals if str(g.get("id")) == str(goal_id).strip()), None)
+            if not target_goal:
+                return json.dumps({"error": f"Goal '{goal_id}' not found.", "status": "error"})
+
+            updates = {}
+            if name is not None:
+                updates["name"] = name
+            if target_amount is not None:
+                updates["target_amount"] = target_amount
+            if target_date is not None:
+                updates["target_date"] = target_date
+            if saved_so_far is not None:
+                updates["saved_so_far"] = saved_so_far
+
+            merged = dict(target_goal)
+            merged.update(updates)
+            ok, clean_goal = validate_goal(merged, workspace=target_dir, is_update=True)
+            if not ok:
+                return json.dumps({"error": clean_goal, "status": "error"})
+
+            proposal_id = f"prop_{uuid.uuid4().hex[:8]}"
+            preview = {
+                "before": target_goal,
+                "after": clean_goal,
+            }
+            proposal = store.create_proposal(
+                kind="goal_change",
+                payload={"action": "update", "goal_id": str(goal_id).strip(), "updates": clean_goal, "name": clean_goal["name"]},
+                preview=preview,
+                risk="low",
+                workspace=target_dir,
+                proposal_id=proposal_id,
+            )
+            _sync_legacy_proposals(proposal_id, proposal)
+            log_event("goal_update_proposed", {"proposal_id": proposal_id, "goal_id": goal_id, "risk": "low"})
+            return json.dumps({
+                "proposal_id": proposal_id,
+                "kind": "goal_change",
+                "action": "update",
+                "goal_id": str(goal_id).strip(),
+                "preview": preview,
+                "risk": "low",
+                "status": "pending_confirmation",
+                "message": f"Proposal {proposal_id} created to update goal '{clean_goal['name']}'.",
+            })
+
+    except Exception as e:
+        return json.dumps({"error": str(e), "status": "error"})
+
+
+def propose_preference_change(
+    savings_target_percent: float | int | None = None,
+    alert_bills_days: int | None = None,
+    currency_label: str | None = None,
+    preferences: dict | None = None,
+    workspace: Path | str | None = None,
+) -> str:
+    """Propose changing user preferences (savings_target_percent, alert_bills_days, currency_label).
+    Risk is 'low' (needs 'yes').
+    """
+    try:
+        from src.validators import validate_preferences
+        target_dir = Path(workspace).resolve() if workspace is not None else store.get_data_dir()
+        old_prefs = store.get_preferences(workspace=target_dir)
+
+        new_dict = dict(old_prefs)
+        if isinstance(preferences, dict):
+            new_dict.update(preferences)
+        if savings_target_percent is not None:
+            new_dict["savings_target_percent"] = savings_target_percent
+        if alert_bills_days is not None:
+            new_dict["alert_bills_days"] = alert_bills_days
+        if currency_label is not None:
+            new_dict["currency_label"] = currency_label
+
+        ok, clean_prefs = validate_preferences(new_dict)
+        if not ok:
+            return json.dumps({"error": clean_prefs, "status": "error"})
+
+        proposal_id = f"prop_{uuid.uuid4().hex[:8]}"
+        preview = {
+            "before": old_prefs,
+            "after": clean_prefs,
+        }
+        proposal = store.create_proposal(
+            kind="preference_change",
+            payload={"preferences": clean_prefs},
+            preview=preview,
+            risk="low",
+            workspace=target_dir,
+            proposal_id=proposal_id,
+        )
+        _sync_legacy_proposals(proposal_id, proposal)
+        log_event("preference_change_proposed", {"proposal_id": proposal_id, "risk": "low"})
+        return json.dumps({
+            "proposal_id": proposal_id,
+            "kind": "preference_change",
+            "preview": preview,
+            "risk": "low",
+            "status": "pending_confirmation",
+            "message": f"Proposal {proposal_id} created to update preferences.",
+        })
+    except Exception as e:
+        return json.dumps({"error": str(e), "status": "error"})
+
+
+LIST_GOALS_SCHEMA = {
+    "name": "list_goals",
+    "description": "List all active financial goals from the workspace. Returns id, name, target_amount, target_date, saved_so_far, and created date.",
+    "parameters": {
+        "type": "object",
+        "properties": {},
+    },
+}
+
+GET_GOAL_PROGRESS_SCHEMA = {
+    "name": "get_goal_progress",
+    "description": "Calculate and return progress for a savings goal: percent_done, monthly_needed (target minus saved, spread over the months left from the sandbox date), and on_track. In your text answers, use plain numbers and goal names, with no IDs.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "goal_id": {
+                "type": "string",
+                "description": "The unique ID of the goal to check progress for.",
+            },
+        },
+        "required": ["goal_id"],
+    },
+}
+
+PROPOSE_GOAL_SCHEMA = {
+    "name": "propose_goal",
+    "description": "Propose adding, updating, or deleting a financial savings goal. Deleting a goal is high risk and requires CONFIRM, while adding or updating is low risk and requires 'yes'. Arguments: action ('add', 'update', 'delete'), name (string), target_amount (number), target_date (YYYY-MM-DD), saved_so_far (number), goal_id (string, required for update/delete).",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["add", "update", "delete"],
+                "description": "Action to perform: 'add', 'update', or 'delete'.",
+            },
+            "name": {
+                "type": "string",
+                "description": "Name of the savings goal (e.g. 'Emergency Fund', 'Vacation').",
+            },
+            "target_amount": {
+                "type": "number",
+                "description": "Target savings amount in USD.",
+            },
+            "target_date": {
+                "type": "string",
+                "description": "Target completion date in YYYY-MM-DD format.",
+            },
+            "saved_so_far": {
+                "type": "number",
+                "description": "Current amount saved towards this goal in USD (default 0.0).",
+            },
+            "goal_id": {
+                "type": "string",
+                "description": "Goal ID to update or delete.",
+            },
+        },
+        "required": ["action"],
+    },
+}
+
+PROPOSE_PREFERENCE_CHANGE_SCHEMA = {
+    "name": "propose_preference_change",
+    "description": "Propose updating user financial preferences. Arguments: savings_target_percent (0-100), alert_bills_days (integer days ahead to alert for bills), currency_label (symbol or code, e.g. '$'). Risk is low.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "savings_target_percent": {
+                "type": "number",
+                "description": "Target monthly savings percentage of income (0-100, default 20).",
+            },
+            "alert_bills_days": {
+                "type": "integer",
+                "description": "Days in advance to alert for upcoming bills (default 3).",
+            },
+            "currency_label": {
+                "type": "string",
+                "description": "Currency symbol or label (default '$').",
+            },
+        },
+    },
+}
+
 # Only schemas sent to the model
 TOOL_SCHEMAS = [
     GET_MONTHLY_SUMMARY_SCHEMA,
@@ -2642,6 +3024,10 @@ TOOL_SCHEMAS = [
     PROPOSE_BILL_CHANGE_SCHEMA,
     REVISE_PROPOSAL_SCHEMA,
     GET_ALERTS_SCHEMA,
+    LIST_GOALS_SCHEMA,
+    GET_GOAL_PROGRESS_SCHEMA,
+    PROPOSE_GOAL_SCHEMA,
+    PROPOSE_PREFERENCE_CHANGE_SCHEMA,
 ]
 
 TOOLS_BY_NAME = {
@@ -2661,6 +3047,10 @@ TOOLS_BY_NAME = {
     "propose_bill_change": propose_bill_change,
     "revise_proposal": revise_proposal,
     "get_alerts": get_alerts,
+    "list_goals": list_goals,
+    "get_goal_progress": get_goal_progress,
+    "propose_goal": propose_goal,
+    "propose_preference_change": propose_preference_change,
 }
 
 

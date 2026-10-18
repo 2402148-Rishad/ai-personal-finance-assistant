@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 from typing import Any, Collection
+import uuid
 import pandas as pd
 
 try:
@@ -251,16 +252,6 @@ def validate_category(
 
     return False, f"Category '{category}' is invalid. Must be one of: {sorted(cats)}."
 
-    if cat_str in cats:
-        return True, cat_str
-
-    # Case-insensitive match fallback
-    for known in cats:
-        if known.lower() == cat_str.lower():
-            return True, known
-
-    return False, f"Category '{category}' is invalid. Must be one of: {sorted(cats)}."
-
 
 def validate_text(
     text: Any,
@@ -303,3 +294,126 @@ def validate_text(
         cleaned = cleaned[:max_length]
 
     return True, cleaned
+
+
+def validate_goal(
+    data: dict[str, Any],
+    workspace: Any = None,
+    is_update: bool = False,
+) -> tuple[bool, dict[str, Any] | str]:
+    """Validate financial goal record:
+    Fields: id, name, target_amount, target_date, saved_so_far, created.
+
+    Returns (ok, cleaned_dict_or_error_message).
+    """
+    if not isinstance(data, dict):
+        return False, "Goal data must be a dictionary."
+
+    # id: if not provided or empty, generate one (unless is_update and missing)
+    g_id = str(data.get("id") or data.get("goal_id") or "").strip()
+    if not g_id:
+        if is_update:
+            return False, "Goal ID is required for update."
+        g_id = f"g_{uuid.uuid4().hex[:8]}"
+
+    # name: validated and cleaned with validate_text; injection strings remain harmless plain text
+    name_val = data.get("name")
+    ok_name, clean_name = validate_text(name_val, max_length=100)
+    if not ok_name:
+        return False, f"Invalid goal name: {clean_name}"
+
+    # target_amount: positive float
+    amt_val = data.get("target_amount")
+    ok_amt, clean_amt = validate_amount(amt_val)
+    if not ok_amt:
+        return False, f"Invalid target_amount: {clean_amt}"
+    if clean_amt <= 0:
+        return False, "Target amount must be greater than zero."
+
+    # target_date: valid ISO date string YYYY-MM-DD
+    t_date = data.get("target_date")
+    if not t_date or not str(t_date).strip():
+        return False, "Target date cannot be empty."
+    try:
+        clean_target_date = date.fromisoformat(str(t_date).strip()).isoformat()
+    except (ValueError, TypeError):
+        return False, f"Invalid target_date '{t_date}'. Expected YYYY-MM-DD format."
+
+    # saved_so_far: non-negative float (default 0.0)
+    saved_val = data.get("saved_so_far", 0.0)
+    if saved_val is None or str(saved_val).strip() == "":
+        saved_val = 0.0
+    try:
+        clean_saved = float(saved_val)
+        if clean_saved < 0:
+            return False, "saved_so_far cannot be negative."
+        clean_saved = round(clean_saved, 2)
+    except (ValueError, TypeError):
+        return False, f"Invalid saved_so_far '{saved_val}'."
+
+    # created: ISO date string (default sandbox date)
+    created_val = data.get("created")
+    if not created_val or not str(created_val).strip():
+        created_val = get_sandbox_today(workspace=workspace)
+    else:
+        created_val = str(created_val).strip()
+
+    return True, {
+        "id": g_id,
+        "name": clean_name,
+        "target_amount": clean_amt,
+        "target_date": clean_target_date,
+        "saved_so_far": clean_saved,
+        "created": created_val,
+    }
+
+
+def validate_preferences(data: dict[str, Any]) -> tuple[bool, dict[str, Any] | str]:
+    """Validate user preferences dictionary:
+    savings_target_percent (default 20, 0-100)
+    alert_bills_days (default 3, int >= 0)
+    currency_label (default "$", 1-5 chars)
+
+    Returns (ok, cleaned_dict_or_error_message).
+    """
+    if not isinstance(data, dict):
+        return False, "Preferences must be a dictionary."
+
+    # savings_target_percent
+    st_val = data.get("savings_target_percent", 20)
+    if st_val is None or str(st_val).strip() == "":
+        st_val = 20
+    try:
+        st_num = float(st_val)
+        if not (0 <= st_num <= 100):
+            return False, "savings_target_percent must be between 0 and 100."
+        if st_num.is_integer():
+            st_num = int(st_num)
+    except (ValueError, TypeError):
+        return False, f"Invalid savings_target_percent: '{st_val}'."
+
+    # alert_bills_days
+    ab_val = data.get("alert_bills_days", 3)
+    if ab_val is None or str(ab_val).strip() == "":
+        ab_val = 3
+    try:
+        ab_int = int(ab_val)
+        if ab_int < 0:
+            return False, "alert_bills_days cannot be negative."
+    except (ValueError, TypeError):
+        return False, f"Invalid alert_bills_days: '{ab_val}'."
+
+    # currency_label
+    cl_val = data.get("currency_label", "$")
+    if cl_val is None or not str(cl_val).strip():
+        cl_val = "$"
+    cl_str = str(cl_val).strip()
+    if len(cl_str) > 5:
+        return False, "currency_label must be 1 to 5 characters."
+
+    return True, {
+        "savings_target_percent": st_num,
+        "alert_bills_days": ab_int,
+        "currency_label": cl_str,
+    }
+

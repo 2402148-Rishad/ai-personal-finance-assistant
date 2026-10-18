@@ -25,6 +25,8 @@ TOOL_TIERS = {
     "savings_recommendations": Tier.READ,
     "get_data_overview": Tier.READ,
     "get_alerts": Tier.READ,
+    "list_goals": Tier.READ,
+    "get_goal_progress": Tier.READ,
 
     # Proposal tools
     "propose_budget_change": Tier.PROPOSE,
@@ -33,6 +35,8 @@ TOOL_TIERS = {
     "propose_delete_transaction": Tier.PROPOSE,
     "propose_bill_change": Tier.PROPOSE,
     "revise_proposal": Tier.PROPOSE,
+    "propose_goal": Tier.PROPOSE,
+    "propose_preference_change": Tier.PROPOSE,
 }
 
 

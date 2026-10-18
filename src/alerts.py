@@ -139,15 +139,18 @@ def get_alerts(workspace: Path | str | None = None) -> list[dict]:
                                 "priority": 3,
                             })
 
-            # Check bills due within 3 days
-            raw_bills = tools.upcoming_bills(today=today, days_ahead=3)
+            # Check bills due within alert_bills_days (from preferences, default 3)
+            prefs = store.get_preferences(workspace=target_dir)
+            alert_days = int(prefs.get("alert_bills_days", 3))
+
+            raw_bills = tools.upcoming_bills(today=today, days_ahead=alert_days)
             bills_data = json.loads(raw_bills)
             if isinstance(bills_data, dict) and "error" not in bills_data:
                 for b in bills_data.get("upcoming_bills", []):
                     b_name = str(b.get("bill_name", "Bill")).strip()
                     clean_bname = re.sub(r"[^a-zA-Z0-9_]", "_", b_name.lower())
                     days = int(b.get("days_until_due", 0))
-                    if 0 <= days <= 3:
+                    if 0 <= days <= alert_days:
                         if not any(a["id"] == f"bill_overdue_{clean_bname}" for a in alerts):
                             if days == 0:
                                 txt = f"{b_name} is due today."

@@ -83,6 +83,20 @@ def _format_proposal_summary(prop: dict) -> str:
         except Exception:
             amt_s = ""
         return f"{action.title()} bill {b_name}{amt_s}"
+    elif kind == "goal_change":
+        goal = payload.get("goal") if isinstance(payload.get("goal"), dict) else payload
+        action = prop.get("action") or payload.get("action") or "change"
+        g_name = goal.get("name", "Goal")
+        amt = goal.get("target_amount")
+        try:
+            amt_s = f" (${float(amt):.2f})" if amt is not None else ""
+        except Exception:
+            amt_s = ""
+        return f"{action.title()} goal {g_name}{amt_s}"
+    elif kind == "preference_change":
+        prefs = payload.get("preferences") if isinstance(payload.get("preferences"), dict) else payload
+        changes = [f"{k}={v}" for k, v in prefs.items()]
+        return f"Update preferences: {', '.join(changes)}"
     return "Proposal"
 
 
@@ -154,4 +168,6 @@ Rules:
 18. When the user corrects a pending proposal ("no, I meant Dining", "make it 40", "actually yesterday"), call revise_proposal with the id from the block. Never create a second proposal for a correction. If there is nothing pending, say so and ask what to change. After a correction, the reply shows the old and new values, the proposal id and the new expiry. ("No, I meant..." or "make it X instead" revises the pending proposal instead of creating a new one.)
 19. Only pass a category the user named in their message. If they did not name one, leave category empty so the tool asks.
 20. When the user provides a category for an item from a multi-item request, call propose_add_transactions with the items so any remaining items without categories can be clarified.
-21. When asked 'What needs my attention?' or about alerts, call get_alerts and report what needs attention, starting with the most urgent alert."""
+21. When asked 'What needs my attention?' or about alerts, call get_alerts and report what needs attention, starting with the most urgent alert.
+22. You can propose adding, updating, or deleting goals using propose_goal, and preference changes using propose_preference_change. You cannot write or modify goals or preferences directly. Deleting a goal is high risk and needs CONFIRM, while adding or updating needs yes.
+23. When answering about goals or goal progress, use list_goals and get_goal_progress. In text answers, use plain numbers and goal names, with no IDs."""

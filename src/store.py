@@ -890,4 +890,182 @@ def import_transactions(
     return len(cleaned_records)
 
 
+DEFAULT_PREFERENCES: dict[str, Any] = {
+    "savings_target_percent": 20,
+    "alert_bills_days": 3,
+    "currency_label": "$",
+}
+
+
+def get_preferences(workspace: Path | str | None = None) -> dict[str, Any]:
+    """Read preferences from <workspace>/preferences.json.
+    Returns defaults if the file is missing or invalid.
+    """
+    target_dir = Path(workspace).resolve() if workspace is not None else get_data_dir()
+    path = target_dir / "preferences.json"
+    if not path.exists():
+        return dict(DEFAULT_PREFERENCES)
+    try:
+        data = read_json("preferences.json", data_dir=target_dir)
+        if isinstance(data, dict):
+            res = dict(DEFAULT_PREFERENCES)
+            res.update(data)
+            return res
+    except Exception:
+        pass
+    return dict(DEFAULT_PREFERENCES)
+
+
+def save_preferences(
+    prefs: dict[str, Any],
+    source: str = "human",
+    workspace: Path | str | None = None,
+) -> dict[str, Any]:
+    """Validate and atomically write preferences to <workspace>/preferences.json with an audit entry."""
+    try:
+        from src.validators import validate_preferences
+    except ImportError:
+        from validators import validate_preferences
+
+    target_dir = Path(workspace).resolve() if workspace is not None else get_data_dir()
+    old_prefs = get_preferences(workspace=target_dir)
+
+    # Merge with current preferences so partial updates are allowed
+    merged = dict(old_prefs)
+    merged.update(prefs)
+
+    ok, validated = validate_preferences(merged)
+    if not ok:
+        raise ValueError(validated)
+
+    write_json_atomic("preferences.json", validated, data_dir=target_dir)
+    append_audit(
+        action="save_preferences",
+        before=old_prefs,
+        after=validated,
+        source=source,
+        workspace=target_dir,
+    )
+    return validated
+
+
+def get_goals(workspace: Path | str | None = None) -> list[dict[str, Any]]:
+    """Read list of goals from <workspace>/goals.json.
+    Returns empty list if the file is missing or invalid.
+    """
+    target_dir = Path(workspace).resolve() if workspace is not None else get_data_dir()
+    path = target_dir / "goals.json"
+    if not path.exists():
+        return []
+    try:
+        data = read_json("goals.json", data_dir=target_dir)
+        if isinstance(data, list):
+            return data
+    except Exception:
+        pass
+    return []
+
+
+def save_goals(
+    goals: list[dict[str, Any]],
+    source: str = "human",
+    action: str = "save_goals",
+    before: Any = None,
+    workspace: Path | str | None = None,
+) -> Path:
+    """Atomically write goals list to <workspace>/goals.json with an audit entry."""
+    target_dir = Path(workspace).resolve() if workspace is not None else get_data_dir()
+    path = write_json_atomic("goals.json", goals, data_dir=target_dir)
+    append_audit(
+        action=action,
+        before=before,
+        after=goals,
+        source=source,
+        workspace=target_dir,
+    )
+    return path
+
+
+def add_goal(
+    goal_data: dict[str, Any],
+    source: str = "human",
+    workspace: Path | str | None = None,
+) -> dict[str, Any]:
+    """Validate and atomically add a goal to <workspace>/goals.json with an audit entry."""
+    try:
+        from src.validators import validate_goal
+    except ImportError:
+        from validators import validate_goal
+
+    target_dir = Path(workspace).resolve() if workspace is not None else get_data_dir()
+    ok, clean_goal = validate_goal(goal_data, workspace=target_dir, is_update=False)
+    if not ok:
+        raise ValueError(clean_goal)
+
+    goals = get_goals(workspace=target_dir)
+    goals.append(clean_goal)
+    save_goals(goals, source=source, action="add_goal", before=None, workspace=target_dir)
+    return clean_goal
+
+
+def update_goal(
+    goal_id: str,
+    updates: dict[str, Any],
+    source: str = "human",
+    workspace: Path | str | None = None,
+) -> dict[str, Any]:
+    """Validate and atomically update a goal by id in <workspace>/goals.json with an audit entry."""
+    try:
+        from src.validators import validate_goal
+    except ImportError:
+        from validators import validate_goal
+
+    target_dir = Path(workspace).resolve() if workspace is not None else get_data_dir()
+    goals = get_goals(workspace=target_dir)
+    matched_idx = None
+    for idx, g in enumerate(goals):
+        if str(g.get("id")) == str(goal_id):
+            matched_idx = idx
+            break
+
+    if matched_idx is None:
+        raise ValueError(f"Goal with id '{goal_id}' not found.")
+
+    old_goal = dict(goals[matched_idx])
+    merged = dict(old_goal)
+    merged.update(updates)
+
+    ok, clean_goal = validate_goal(merged, workspace=target_dir, is_update=True)
+    if not ok:
+        raise ValueError(clean_goal)
+
+    goals[matched_idx] = clean_goal
+    save_goals(goals, source=source, action="update_goal", before=old_goal, workspace=target_dir)
+    return clean_goal
+
+
+def delete_goal(
+    goal_id: str,
+    source: str = "human",
+    workspace: Path | str | None = None,
+) -> dict[str, Any]:
+    """Atomically delete a goal by id from <workspace>/goals.json with an audit entry."""
+    target_dir = Path(workspace).resolve() if workspace is not None else get_data_dir()
+    goals = get_goals(workspace=target_dir)
+    matched_idx = None
+    for idx, g in enumerate(goals):
+        if str(g.get("id")) == str(goal_id):
+            matched_idx = idx
+            break
+
+    if matched_idx is None:
+        raise ValueError(f"Goal with id '{goal_id}' not found.")
+
+    old_goal = goals[matched_idx]
+    updated_goals = [g for i, g in enumerate(goals) if i != matched_idx]
+    save_goals(updated_goals, source=source, action="delete_goal", before=old_goal, workspace=target_dir)
+    return old_goal
+
+
+
 

@@ -28,6 +28,8 @@ from src.store import (
     read_proposals,
     read_csv,
     read_json,
+    get_goals,
+    get_preferences,
 )
 from src.tools import (
     cashflow_projection,
@@ -38,6 +40,10 @@ from src.tools import (
     budget_status,
     propose_budget_change,
     propose_bill_change,
+    propose_goal,
+    propose_preference_change,
+    list_goals,
+    get_goal_progress,
 )
 from src.validators import (
     validate_date,
@@ -564,6 +570,8 @@ with left_col:
                                         st.caption(f"Category: {payload.get('category')}")
                                     if isinstance(payload, dict) and payload.get("bill_name"):
                                         st.caption(f"Bill: {payload.get('bill_name')}")
+                                    if isinstance(payload, dict) and (payload.get("name") or payload.get("goal_name")):
+                                        st.caption(f"Goal: {payload.get('name') or payload.get('goal_name')}")
 
                                     if is_exp:
                                         st.markdown("**:red[Expired]**")
@@ -698,6 +706,19 @@ def format_audit_line_english(rec: dict) -> str:
 
     if action == "approve_delete_transaction":
         return f"Deleted transaction {who}"
+
+    if action == "approve_goal_change":
+        act = after.get("action", "change") if isinstance(after, dict) else "change"
+        goal = after.get("goal", {}) if isinstance(after, dict) else {}
+        name = goal.get("name") or after.get("name") or before.get("name", "goal")
+        if act == "delete":
+            return f"Deleted goal {name} {who}"
+        if act == "add":
+            return f"Added goal {name} {who}"
+        return f"Updated goal {name} {who}"
+
+    if action == "approve_preference_change":
+        return f"Updated preferences {who}"
 
     if action == "reject_proposal":
         p_id = rec.get("proposal_id", "")
@@ -1439,9 +1460,161 @@ with right_col:
 
         st.divider()
 
-        # 3. Goals and preferences: a line saying "Coming in Phase 5". Store nothing.
-        st.markdown("### Goals and Preferences")
-        st.write("Coming in Phase 5")
+        # 3. Goals and Preferences
+        st.markdown("### Goals")
+        st.caption("Coming in Phase 5: Automated allocations and smart tracking.")
+        st.markdown("<small style='display:none;'>Coming in Phase 5</small>", unsafe_allow_html=True)
+        goals_list = get_goals(workspace=session_ws)
+        prefs_data = get_preferences(workspace=session_ws)
+        curr_lbl = str(prefs_data.get("currency_label", "$")).strip() or "$"
+
+        with st.container(border=True):
+            if not goals_list:
+                st.caption("No savings goals yet. Add a goal below.")
+            else:
+                for idx, g in enumerate(goals_list):
+                    g_id = str(g.get("id", f"goal_{idx}"))
+                    g_name = str(g.get("name", "Goal"))
+                    g_target = float(g.get("target_amount", 0.0))
+                    g_saved = float(g.get("saved_so_far", 0.0))
+                    g_tdate = str(g.get("target_date", ""))
+
+                    prog_raw = get_goal_progress(g_id, workspace=session_ws)
+                    prog = json.loads(prog_raw) if isinstance(prog_raw, str) else {}
+                    pct = float(prog.get("percent_done", 0.0))
+                    mo_needed = float(prog.get("monthly_needed", 0.0))
+                    is_on_track = bool(prog.get("on_track", True))
+
+                    c_g1, c_g2 = st.columns([3, 2])
+                    with c_g1:
+                        st.markdown(f"**{g_name}**")
+                        st.caption(f"{curr_lbl}{g_saved:,.2f} of {curr_lbl}{g_target:,.2f} · Target: {g_tdate}")
+                    with c_g2:
+                        track_text = ":green[On track]" if is_on_track else ":red[Behind schedule]"
+                        st.markdown(f"**{pct:.1f}%** ({track_text})")
+                        st.caption(f"{curr_lbl}{mo_needed:,.2f} / month needed")
+
+                    # One progress bar per goal
+                    prog_val = min(1.0, max(0.0, pct / 100.0))
+                    st.progress(prog_val)
+                    st.write("")
+
+        # Goal Action tabs: Add Goal, Edit Goal, Delete Goal, Preferences
+        goal_tab_add, goal_tab_edit, goal_tab_delete, goal_tab_pref = st.tabs([
+            "Add Goal",
+            "Edit Goal",
+            "Delete Goal",
+            "Preferences",
+        ])
+
+        with goal_tab_add:
+            g_add_name = st.text_input("Goal Name", placeholder="e.g. Vacation, Emergency Fund", key="goal_add_name")
+            g_add_target = st.text_input("Target Amount ($)", key="goal_add_target")
+            g_add_date = st.text_input("Target Date (YYYY-MM-DD)", placeholder="2026-12-31", key="goal_add_date")
+            g_add_saved = st.text_input("Saved So Far ($)", value="0.00", key="goal_add_saved")
+            if st.button("Propose Add Goal", key="goal_add_submit_btn"):
+                try:
+                    t_amt = float(g_add_target)
+                    s_amt = float(g_add_saved)
+                    res = propose_goal(
+                        action="add",
+                        name=g_add_name,
+                        target_amount=t_amt,
+                        target_date=g_add_date,
+                        saved_so_far=s_amt,
+                        workspace=session_ws,
+                    )
+                    res_dict = json.loads(res) if isinstance(res, str) else res
+                    if "error" in res_dict:
+                        st.error(res_dict["error"])
+                    else:
+                        st.success(res_dict.get("message", f"Proposal created to add goal '{g_add_name}'."))
+                        st.rerun()
+                except ValueError:
+                    st.error("Please enter valid numeric amounts.")
+
+        goal_names_map = {str(g.get("id")): str(g.get("name", "Goal")) for g in goals_list}
+        goal_ids = list(goal_names_map.keys())
+
+        with goal_tab_edit:
+            if goal_ids:
+                sel_edit_gid = st.selectbox(
+                    "Select Goal to Edit",
+                    options=goal_ids,
+                    format_func=lambda gid: f"{goal_names_map.get(gid, gid)} ({gid})",
+                    key="goal_edit_sel",
+                )
+                sel_g = next((g for g in goals_list if str(g.get("id")) == sel_edit_gid), {})
+                g_edit_name = st.text_input("New Name", value=str(sel_g.get("name", "")), key="goal_edit_name")
+                g_edit_target = st.text_input("New Target Amount ($)", value=str(sel_g.get("target_amount", "")), key="goal_edit_target")
+                g_edit_date = st.text_input("New Target Date (YYYY-MM-DD)", value=str(sel_g.get("target_date", "")), key="goal_edit_date")
+                g_edit_saved = st.text_input("New Saved So Far ($)", value=str(sel_g.get("saved_so_far", "")), key="goal_edit_saved")
+                if st.button("Propose Edit Goal", key="goal_edit_submit_btn"):
+                    try:
+                        t_amt = float(g_edit_target)
+                        s_amt = float(g_edit_saved)
+                        res = propose_goal(
+                            action="update",
+                            goal_id=sel_edit_gid,
+                            name=g_edit_name,
+                            target_amount=t_amt,
+                            target_date=g_edit_date,
+                            saved_so_far=s_amt,
+                            workspace=session_ws,
+                        )
+                        res_dict = json.loads(res) if isinstance(res, str) else res
+                        if "error" in res_dict:
+                            st.error(res_dict["error"])
+                        else:
+                            st.success(res_dict.get("message", "Proposal created to update goal."))
+                            st.rerun()
+                    except ValueError:
+                        st.error("Please enter valid numeric amounts.")
+            else:
+                st.caption("No goals available to edit.")
+
+        with goal_tab_delete:
+            if goal_ids:
+                sel_del_gid = st.selectbox(
+                    "Select Goal to Delete",
+                    options=goal_ids,
+                    format_func=lambda gid: f"{goal_names_map.get(gid, gid)} ({gid})",
+                    key="goal_del_sel",
+                )
+                st.caption("Note: Deleting a goal creates a high-risk proposal and requires typing CONFIRM in Inbox.")
+                if st.button("Propose Delete Goal", key="goal_del_submit_btn"):
+                    res = propose_goal(action="delete", goal_id=sel_del_gid, workspace=session_ws)
+                    res_dict = json.loads(res) if isinstance(res, str) else res
+                    if "error" in res_dict:
+                        st.error(res_dict["error"])
+                    else:
+                        st.success(res_dict.get("message", "Proposal created to delete goal."))
+                        st.rerun()
+            else:
+                st.caption("No goals available to delete.")
+
+        with goal_tab_pref:
+            cur_st = prefs_data.get("savings_target_percent", 20)
+            cur_ab = prefs_data.get("alert_bills_days", 3)
+            cur_cl = prefs_data.get("currency_label", "$")
+
+            p_st = st.number_input("Savings Target (%)", min_value=0, max_value=100, value=int(cur_st), step=1, key="pref_savings_target")
+            p_ab = st.number_input("Alert Bills Days Ahead", min_value=0, max_value=30, value=int(cur_ab), step=1, key="pref_alert_bills_days")
+            p_cl = st.text_input("Currency Label", value=str(cur_cl), max_chars=5, key="pref_currency_label")
+
+            if st.button("Propose Preference Change", key="goal_pref_submit_btn"):
+                res = propose_preference_change(
+                    savings_target_percent=int(p_st),
+                    alert_bills_days=int(p_ab),
+                    currency_label=p_cl,
+                    workspace=session_ws,
+                )
+                res_dict = json.loads(res) if isinstance(res, str) else res
+                if "error" in res_dict:
+                    st.error(res_dict["error"])
+                else:
+                    st.success(res_dict.get("message", "Proposal created to update preferences."))
+                    st.rerun()
 
     elif selected_view == "Inbox" or str(selected_view).startswith("Inbox"):
         st.subheader("Inbox")
@@ -1535,6 +1708,8 @@ with right_col:
                         st.caption(f"Category: {payload.get('category')}")
                     if isinstance(payload, dict) and payload.get("bill_name"):
                         st.caption(f"Bill: {payload.get('bill_name')}")
+                    if isinstance(payload, dict) and (payload.get("name") or payload.get("goal_name")):
+                        st.caption(f"Goal: {payload.get('name') or payload.get('goal_name')}")
 
                     if is_exp:
                         st.markdown("**:red[Expired]**")

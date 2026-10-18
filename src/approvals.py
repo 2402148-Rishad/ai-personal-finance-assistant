@@ -429,6 +429,74 @@ def approve(proposal_id: str, answer: str, workspace: Path | str | None = None) 
                 "bill_name": bill_name,
             }
 
+    elif kind == "goal_change":
+        action = payload.get("action", "add")
+        g_id = payload.get("goal_id") or payload.get("id")
+        if action == "add":
+            goal_data = payload.get("goal") if isinstance(payload.get("goal"), dict) else payload
+            res_goal = store.add_goal(goal_data, source="human", workspace=ws)
+            before_state = {
+                "file": "goals.json",
+                "kind": "goal_change",
+                "action": "add",
+                "goal_id": res_goal["id"],
+            }
+            after_state = {
+                "file": "goals.json",
+                "kind": "goal_change",
+                "action": "add",
+                "goal": res_goal,
+            }
+        elif action == "update":
+            updates = payload.get("updates") if isinstance(payload.get("updates"), dict) else payload.get("fields", payload)
+            goals = store.get_goals(workspace=ws)
+            old_g = next((g for g in goals if str(g.get("id")) == str(g_id)), None)
+            res_goal = store.update_goal(str(g_id), updates, source="human", workspace=ws)
+            before_state = {
+                "file": "goals.json",
+                "kind": "goal_change",
+                "action": "update",
+                "goal_id": g_id,
+                "previous_goal": old_g,
+            }
+            after_state = {
+                "file": "goals.json",
+                "kind": "goal_change",
+                "action": "update",
+                "goal": res_goal,
+            }
+        elif action == "delete":
+            deleted_g = store.delete_goal(str(g_id), source="human", workspace=ws)
+            before_state = {
+                "file": "goals.json",
+                "kind": "goal_change",
+                "action": "delete",
+                "goal_id": g_id,
+                "deleted_goal": deleted_g,
+            }
+            after_state = {
+                "file": "goals.json",
+                "kind": "goal_change",
+                "action": "delete",
+                "goal_id": g_id,
+                "status": "deleted",
+            }
+
+    elif kind == "preference_change":
+        new_prefs = payload.get("preferences") if isinstance(payload.get("preferences"), dict) else payload
+        old_prefs = store.get_preferences(workspace=ws)
+        res_prefs = store.save_preferences(new_prefs, source="human", workspace=ws)
+        before_state = {
+            "file": "preferences.json",
+            "kind": "preference_change",
+            "previous_preferences": old_prefs,
+        }
+        after_state = {
+            "file": "preferences.json",
+            "kind": "preference_change",
+            "preferences": res_prefs,
+        }
+
     # Remove proposal from pending store
     proposals.pop(proposal_id, None)
     _save_proposals(proposals, workspace=ws)
@@ -673,6 +741,29 @@ def undo(workspace: Path | str | None = None) -> dict:
                         df_bills.at[idx, k] = v
                     break
             store.write_csv_atomic("bills.csv", df_bills, workspace=ws)
+
+    elif file_type == "goals.json" or kind == "goal_change":
+        action = before_state.get("action")
+        g_id = before_state.get("goal_id")
+        goals = store.get_goals(workspace=ws)
+        if action == "add":
+            updated_goals = [g for g in goals if str(g.get("id")) != str(g_id)]
+            store.save_goals(updated_goals, source="human", action="undo_add_goal", before=goals, workspace=ws)
+        elif action == "delete":
+            deleted_g = before_state.get("deleted_goal")
+            if deleted_g:
+                goals.append(deleted_g)
+                store.save_goals(goals, source="human", action="undo_delete_goal", before=None, workspace=ws)
+        elif action == "update":
+            prev_g = before_state.get("previous_goal")
+            if prev_g:
+                updated_goals = [prev_g if str(g.get("id")) == str(g_id) else g for g in goals]
+                store.save_goals(updated_goals, source="human", action="undo_update_goal", before=goals, workspace=ws)
+
+    elif file_type == "preferences.json" or kind == "preference_change":
+        prev_prefs = before_state.get("previous_preferences")
+        if prev_prefs:
+            store.save_preferences(prev_prefs, source="human", workspace=ws)
 
     # Append audit line for undo
     store.append_audit(
