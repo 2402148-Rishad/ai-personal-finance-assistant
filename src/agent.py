@@ -64,6 +64,7 @@ def build_source_line(tool_calls: list[dict]) -> str:
             "find_possible_duplicates",
             "detect_spending_spikes",
             "find_subscriptions",
+            "find_duplicates",
         ):
             sources.append(tx_name)
         elif name in ("budget_status", "savings_recommendations"):
@@ -71,7 +72,7 @@ def build_source_line(tool_calls: list[dict]) -> str:
             sources.append("budgets.json")
         elif name == "upcoming_bills":
             sources.append("bills.csv")
-        elif name in ("cashflow_projection", "whatif_cashflow"):
+        elif name in ("cashflow_projection", "whatif_cashflow", "rescue_plan"):
             sources.append("account.json")
             sources.append("bills.csv")
             sources.append("transactions.csv")
@@ -261,7 +262,9 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
         is_sub_query = bool(re.search(r"\bsubscriptions?\b", q_lower))
         is_inquiry_pay = bool(re.search(r"\b(which|what|how\s+much|do|did)\b.*\bpay\b", q_lower))
         is_whatif_cancel = bool(re.search(r"\bwhat\s+if\b.*\bcancel\b", q_lower))
-        if any(re.search(pat, q_lower) for pat in out_of_scope_patterns) and not (is_sub_query or is_inquiry_pay or is_whatif_cancel):
+        is_dup_query = bool(re.search(r"\bduplicates?\b", q_lower))
+        is_rescue_query = bool(re.search(r"\b(shortfall|rescue|run\s+out\s+of\s+money|running\s+out\s+of\s+money)\b", q_lower))
+        if any(re.search(pat, q_lower) for pat in out_of_scope_patterns) and not (is_sub_query or is_inquiry_pay or is_whatif_cancel or is_dup_query or is_rescue_query):
             fixed_answer = "I can't move money or connect to your bank. I can show your simulated sandbox balance and bills."
             log_event("out_of_scope_refusal", {"question": question, "answer": fixed_answer})
             convo_history.append(types.Content(role="user", parts=[types.Part.from_text(text=question)]))
@@ -385,6 +388,8 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
 
                 whatif_tc = next((tc for tc in all_tool_calls if tc.get("name") == "whatif_cashflow"), None)
                 find_sub_tc = next((tc for tc in all_tool_calls if tc.get("name") == "find_subscriptions"), None)
+                find_dup_tc = next((tc for tc in all_tool_calls if tc.get("name") in ("find_duplicates", "find_possible_duplicates")), None)
+                rescue_tc = next((tc for tc in all_tool_calls if tc.get("name") == "rescue_plan"), None)
 
                 if clarification_tc:
                     item_label = clarification_tc.get("item_label") or "expense"
@@ -464,6 +469,85 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
                             ]
                             lines.append(f"Total: ${total_m:.2f}")
                             answer = "\n".join(lines)
+                elif find_dup_tc:
+                    r = find_dup_tc.get("result", {})
+                    if isinstance(r, str):
+                        try:
+                            r = json.loads(r)
+                        except Exception:
+                            r = {}
+                    if r.get("error"):
+                        answer = f"Error finding duplicates: {r.get('error')}"
+                    else:
+                        dups = r.get("duplicates", [])
+                        if not dups and "duplicate_groups" in r:
+                            # Backwards-compat with find_possible_duplicates legacy structure
+                            groups = r.get("duplicate_groups", [])
+                            if groups:
+                                lines = []
+                                for g in groups:
+                                    desc = g.get("description", "Charge")
+                                    amt = float(g.get("amount", 0.0))
+                                    dt = g.get("date", "")
+                                    from src.tools import format_day_month
+                                    dt_h = format_day_month(dt)
+                                    lines.append(f"Possible duplicate: {desc} ${amt:.2f} on {dt_h} and {dt_h}. Want to remove one?")
+                                answer = "\n".join(lines)
+                            else:
+                                answer = "No duplicate charges found."
+                        elif not dups:
+                            answer = "No duplicate charges found."
+                        else:
+                            lines = []
+                            for d in dups:
+                                desc = d.get("description", "Charge")
+                                amt = float(d.get("amount", 0.0))
+                                d1 = d.get("date1_human", "")
+                                d2 = d.get("date2_human", "")
+                                lines.append(f"Possible duplicate: {desc} ${amt:.2f} on {d1} and {d2}. Want to remove one?")
+                            answer = "\n".join(lines)
+                elif rescue_tc:
+                    r = rescue_tc.get("result", {})
+                    if isinstance(r, str):
+                        try:
+                            r = json.loads(r)
+                        except Exception:
+                            r = {}
+                    if r.get("error"):
+                        answer = f"Error generating rescue plan: {r.get('error')}"
+                    elif not r.get("has_shortfall"):
+                        answer = "Your balance does not drop below zero in the next 30 days. No shortfall projected."
+                    else:
+                        shortfall = float(r.get("shortfall", 0.0))
+                        lowest_balance = float(r.get("lowest_balance", 0.0))
+                        drop_amt = abs(lowest_balance) if lowest_balance < 0 else shortfall
+                        date_val = r.get("lowest_balance_date_human") or r.get("lowest_balance_date") or AS_OF_DATE
+                        options = r.get("options", [])
+                        covers_gap = bool(r.get("covers_gap", False))
+                        missing = float(r.get("missing", 0.0))
+
+                        if not options:
+                            answer = f"Your balance drops to -${drop_amt:.2f} on {date_val}. No options available to reduce expenses. Still missing: ${drop_amt:.2f}."
+                        else:
+                            opt_strs = []
+                            for i, opt in enumerate(options, 1):
+                                if opt.get("type") == "budget":
+                                    cat = opt.get("category")
+                                    new_limit = float(opt.get("new_limit", 0.0))
+                                    savings = float(opt.get("savings", 0.0))
+                                    opt_strs.append(f"{i}) lower {cat} to ${new_limit:.2f} (+${savings:.2f}).")
+                                elif opt.get("type") == "subscription":
+                                    name = opt.get("name")
+                                    savings = float(opt.get("savings", 0.0))
+                                    opt_strs.append(f"{i}) cancel {name} with the provider (+${savings:.2f}).")
+
+                            if covers_gap:
+                                status_str = "Together they cover the gap: yes."
+                            else:
+                                status_str = f"Together they cover the gap: no. Still missing: ${missing:.2f}."
+
+                            options_text = " ".join(opt_strs)
+                            answer = f"Your balance drops to -${drop_amt:.2f} on {date_val}. Options: {options_text} {status_str}"
                 else:
                     has_revision = any(
                         tc.get("name") == "revise_proposal" and

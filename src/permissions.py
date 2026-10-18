@@ -29,6 +29,8 @@ TOOL_TIERS = {
     "get_goal_progress": Tier.READ,
     "find_subscriptions": Tier.READ,
     "whatif_cashflow": Tier.READ,
+    "find_duplicates": Tier.READ,
+    "rescue_plan": Tier.READ,
 
     # Proposal tools
     "propose_budget_change": Tier.PROPOSE,

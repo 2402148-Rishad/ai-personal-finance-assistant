@@ -457,6 +457,8 @@ with left_col:
                                     "get_data_overview",
                                     "find_subscriptions",
                                     "whatif_cashflow",
+                                    "find_duplicates",
+                                    "rescue_plan",
                                 }
                                 has_read_data = any(tc.get("name") in READ_DATA_TOOLS for tc in tool_calls)
                                 has_proposal = bool(item.get("proposal_ids"))

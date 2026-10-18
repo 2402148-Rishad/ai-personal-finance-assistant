@@ -3241,6 +3241,262 @@ def whatif_cashflow(
         return JsonDict({"error": str(e)})
 
 
+def format_day_month(d_val: Any) -> str:
+    """Format YYYY-MM-DD into '10 Aug'."""
+    if not d_val:
+        return ""
+    try:
+        s = str(d_val).strip()[:10]
+        dt = datetime.strptime(s, "%Y-%m-%d")
+        return f"{dt.day} {dt.strftime('%b')}"
+    except Exception:
+        return str(d_val)
+
+
+def find_duplicates(month: str | None = None, workspace: Path | str | None = None) -> str:
+    """Find near-duplicate expense transactions: same description, same amount, dates within 3 days,
+    and not a recurring charge (25-35 days apart).
+    Returns list of duplicate pairs with earlier and later copy details.
+    """
+    try:
+        target_dir = Path(workspace).resolve() if workspace is not None else store.get_data_dir()
+        t_path = target_dir / "transactions.csv"
+        if not t_path.exists():
+            return JsonDict({"status": "ok", "duplicates": [], "count": 0, "message": "No duplicate transactions found."})
+
+        df = store.read_csv("transactions.csv", data_dir=target_dir)
+        if df.empty or "type" not in df.columns or "amount" not in df.columns or "date" not in df.columns:
+            return JsonDict({"status": "ok", "duplicates": [], "count": 0, "message": "No duplicate transactions found."})
+
+        exp_df = df[df["type"] == "expense"].copy()
+        if exp_df.empty:
+            return JsonDict({"status": "ok", "duplicates": [], "count": 0, "message": "No duplicate transactions found."})
+
+        if "id" not in exp_df.columns:
+            exp_df = store.ensure_transaction_ids(exp_df)
+
+        exp_df["date_dt"] = pd.to_datetime(exp_df["date"], errors="coerce")
+        exp_df = exp_df.dropna(subset=["date_dt"])
+
+        if month:
+            resolved = resolve_period(month)
+            if not isinstance(resolved, dict):
+                m_prefix = resolved[:7] if len(resolved) >= 7 else resolved
+                exp_df = exp_df[exp_df["date"].astype(str).str.startswith(m_prefix)]
+
+        def _clean_desc(d):
+            return str(d).strip().lower()
+
+        exp_df["clean_desc"] = exp_df["description"].apply(_clean_desc)
+        exp_df["clean_amt"] = exp_df["amount"].astype(float).round(2)
+
+        duplicates = []
+        for (desc_key, amt_key), grp in exp_df.groupby(["clean_desc", "clean_amt"]):
+            if len(grp) < 2:
+                continue
+
+            grp_sorted = grp.sort_values(by=["date_dt"])
+            records = grp_sorted.to_dict(orient="records")
+
+            paired_indices = set()
+            n = len(records)
+            for i in range(n):
+                for j in range(i + 1, n):
+                    if i in paired_indices or j in paired_indices:
+                        continue
+                    r1 = records[i]
+                    r2 = records[j]
+                    d1 = r1["date_dt"].date() if hasattr(r1["date_dt"], "date") else r1["date_dt"]
+                    d2 = r2["date_dt"].date() if hasattr(r2["date_dt"], "date") else r2["date_dt"]
+                    day_gap = abs((d2 - d1).days)
+
+                    # Two expense transactions are a near-duplicate if they have the same description,
+                    # the same amount, and dates within 3 days, and they are not a recurring charge (25-35 days apart).
+                    # A pair 3 days apart with the same amount is flagged once. A 30-day recurring pair is not flagged.
+                    if day_gap <= 3:
+                        paired_indices.add(i)
+                        paired_indices.add(j)
+
+                        if d1 <= d2:
+                            earlier, later = r1, r2
+                        else:
+                            earlier, later = r2, r1
+
+                        d1_human = format_day_month(earlier["date"])
+                        d2_human = format_day_month(later["date"])
+
+                        duplicates.append({
+                            "description": sanitize_description(earlier.get("description", desc_key)),
+                            "amount": round(float(amt_key), 2),
+                            "date1": str(earlier["date"]),
+                            "date2": str(later["date"]),
+                            "date1_human": d1_human,
+                            "date2_human": d2_human,
+                            "earlier_transaction_id": str(earlier.get("id")),
+                            "later_transaction_id": str(later.get("id")),
+                            "suggested_delete_id": str(later.get("id")),
+                            "earlier_copy": {k: v for k, v in earlier.items() if k not in ("date_dt", "clean_desc", "clean_amt")},
+                            "later_copy": {k: v for k, v in later.items() if k not in ("date_dt", "clean_desc", "clean_amt")},
+                        })
+
+        return JsonDict({
+            "status": "ok",
+            "count": len(duplicates),
+            "duplicates": duplicates,
+            "message": f"Found {len(duplicates)} possible duplicate charges." if duplicates else "No duplicate transactions found.",
+        })
+    except Exception as e:
+        return JsonDict({"error": str(e), "status": "error", "duplicates": [], "count": 0})
+
+
+def rescue_plan(
+    days_ahead: int = 30,
+    today: str | None = None,
+    workspace: Path | str | None = None,
+) -> str:
+    """If the lowest balance in the 30-day cash projection is below zero, returns the smallest set
+    of changes that covers the gap. Options are budget reductions (lowered to current spend) and
+    subscriptions from find_subscriptions (advice only). If options cannot cover the gap, returns
+    how much is still missing. Read-only tool, never writes to ledger or proposals.
+    """
+    try:
+        import itertools
+        from src.formatters import format_date_human
+
+        try:
+            days_ahead = int(days_ahead) if days_ahead is not None else 30
+        except (ValueError, TypeError):
+            days_ahead = 30
+
+        active_token = None
+        if workspace is not None:
+            active_token = store.set_active_workspace(workspace)
+        try:
+            target_dir = Path(workspace).resolve() if workspace is not None else store.get_data_dir()
+            baseline_raw = cashflow_projection(days_ahead=days_ahead, today=today)
+            baseline = json.loads(baseline_raw) if isinstance(baseline_raw, str) else baseline_raw
+            if "error" in baseline:
+                return JsonDict({"error": baseline["error"], "status": "error"})
+
+            lowest_balance = float(baseline.get("lowest_balance", 0.0))
+            lowest_balance_date = str(baseline.get("lowest_balance_date") or today or AS_OF_DATE)
+            lowest_balance_date_human = format_date_human(lowest_balance_date)
+
+            if lowest_balance >= 0:
+                return JsonDict({
+                    "status": "ok",
+                    "has_shortfall": False,
+                    "lowest_balance": lowest_balance,
+                    "lowest_balance_date": lowest_balance_date,
+                    "lowest_balance_date_human": lowest_balance_date_human,
+                    "options": [],
+                    "covers_gap": True,
+                    "missing": 0.0,
+                    "message": "No cash shortfall projected in the next 30 days.",
+                })
+
+            shortfall = round(abs(lowest_balance), 2)
+            candidates = []
+
+            # 1. Budget reductions: lowered to current spend
+            b_path = target_dir / "budgets.json"
+            t_path = target_dir / "transactions.csv"
+            budgets = {}
+            if b_path.exists():
+                with open(b_path, "r", encoding="utf-8") as f:
+                    try:
+                        budgets = json.load(f)
+                    except Exception:
+                        budgets = {}
+
+            spent_by_cat = {}
+            if t_path.exists():
+                df = store.read_csv("transactions.csv", data_dir=target_dir)
+                if not df.empty and "type" in df.columns and "amount" in df.columns and "date" in df.columns:
+                    as_of_str = str(today or AS_OF_DATE)
+                    curr_month = as_of_str[:7]
+                    m_df = df[(df["month"] == curr_month) & (df["type"] == "expense")]
+                    if not m_df.empty:
+                        spent_by_cat = m_df.groupby("category")["amount"].sum().to_dict()
+
+            for cat, limit in budgets.items():
+                spent = round(float(spent_by_cat.get(cat, 0.0)), 2)
+                limit_val = round(float(limit), 2)
+                if limit_val > spent:
+                    savings = round(limit_val - spent, 2)
+                    new_limit = spent
+                    candidates.append({
+                        "type": "budget",
+                        "category": cat,
+                        "current_limit": limit_val,
+                        "new_limit": new_limit,
+                        "savings": savings,
+                        "text": f"lower {cat} to ${new_limit:.2f} (+${savings:.2f})",
+                    })
+
+            # 2. Subscriptions from find_subscriptions
+            subs_raw = find_subscriptions(workspace=workspace)
+            subs_data = json.loads(subs_raw) if isinstance(subs_raw, str) else subs_data
+            for s in subs_data.get("subscriptions", []):
+                name = str(s.get("name", "")).strip()
+                m_cost = round(float(s.get("monthly_cost", 0.0)), 2)
+                if m_cost > 0 and name:
+                    candidates.append({
+                        "type": "subscription",
+                        "name": name,
+                        "monthly_cost": m_cost,
+                        "savings": m_cost,
+                        "text": f"cancel {name} with the provider (+${m_cost:.2f})",
+                    })
+
+            # Sort candidates by savings descending, then name/category
+            candidates.sort(key=lambda c: (-c["savings"], str(c.get("category") or c.get("name") or "")))
+
+            # Smallest set of changes that covers the gap
+            selected = []
+            covers_gap = False
+            missing = shortfall
+
+            if candidates:
+                for k in range(1, len(candidates) + 1):
+                    valid_combos = [
+                        combo for combo in itertools.combinations(candidates, k)
+                        if sum(c["savings"] for c in combo) >= shortfall
+                    ]
+                    if valid_combos:
+                        # Pick combo that covers gap with highest savings
+                        best_combo = max(valid_combos, key=lambda combo: sum(c["savings"] for c in combo))
+                        selected = list(best_combo)
+                        covers_gap = True
+                        missing = 0.0
+                        break
+
+                if not covers_gap:
+                    selected = list(candidates)
+                    total_savings = round(sum(c["savings"] for c in selected), 2)
+                    missing = round(shortfall - total_savings, 2)
+            else:
+                missing = shortfall
+
+            return JsonDict({
+                "status": "ok",
+                "has_shortfall": True,
+                "lowest_balance": lowest_balance,
+                "lowest_balance_date": lowest_balance_date,
+                "lowest_balance_date_human": lowest_balance_date_human,
+                "shortfall": shortfall,
+                "covers_gap": covers_gap,
+                "missing": missing,
+                "options": selected,
+                "total_savings": round(sum(o["savings"] for o in selected), 2),
+            })
+        finally:
+            if active_token is not None:
+                store.set_active_workspace(None)
+    except Exception as e:
+        return JsonDict({"error": str(e), "status": "error"})
+
+
 FIND_SUBSCRIPTIONS_SCHEMA = {
     "name": "find_subscriptions",
     "description": "Find recurring subscriptions and charges in transactions. Returns name, monthly_cost, last_charged (human date), months_seen, and total_monthly. Plain text, no IDs. A one-off purchase is never flagged.",
@@ -3359,6 +3615,38 @@ PROPOSE_PREFERENCE_CHANGE_SCHEMA = {
     },
 }
 
+FIND_DUPLICATES_SCHEMA = {
+    "name": "find_duplicates",
+    "description": "Finds near-duplicate expense transactions with the same description, same amount, and dates within 3 days (excluding recurring monthly charges 25-35 days apart). Arguments: month (optional string YYYY-MM).",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "month": {
+                "type": "string",
+                "description": "Optional month in YYYY-MM format to filter duplicate search.",
+            },
+        },
+    },
+}
+
+RESCUE_PLAN_SCHEMA = {
+    "name": "rescue_plan",
+    "description": "Finds a rescue plan when projected cashflow drops below zero. Returns the smallest set of changes (budget reductions lowered to current spend, and subscriptions to cancel) that covers the gap, or how much is still missing. Arguments: days_ahead (integer, default 30), today (string YYYY-MM-DD, optional).",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "days_ahead": {
+                "type": "integer",
+                "description": "Forward projection horizon in days (default 30).",
+            },
+            "today": {
+                "type": "string",
+                "description": "Starting date for projection in YYYY-MM-DD format (defaults to the simulated sandbox date).",
+            },
+        },
+    },
+}
+
 # Only schemas sent to the model
 TOOL_SCHEMAS = [
     GET_MONTHLY_SUMMARY_SCHEMA,
@@ -3383,6 +3671,8 @@ TOOL_SCHEMAS = [
     PROPOSE_PREFERENCE_CHANGE_SCHEMA,
     FIND_SUBSCRIPTIONS_SCHEMA,
     WHATIF_CASHFLOW_SCHEMA,
+    FIND_DUPLICATES_SCHEMA,
+    RESCUE_PLAN_SCHEMA,
 ]
 
 TOOLS_BY_NAME = {
@@ -3408,6 +3698,8 @@ TOOLS_BY_NAME = {
     "propose_preference_change": propose_preference_change,
     "find_subscriptions": find_subscriptions,
     "whatif_cashflow": whatif_cashflow,
+    "find_duplicates": find_duplicates,
+    "rescue_plan": rescue_plan,
 }
 
 
