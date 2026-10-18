@@ -873,8 +873,10 @@ def propose_add_transactions(items: list | str) -> str:
         if len(items) == 0:
             return json.dumps({"error": "items list cannot be empty.", "status": "error"})
 
+        overflow_count = 0
         if len(items) > 10:
-            return json.dumps({"error": "Cannot propose more than 10 transactions at once.", "status": "error"})
+            overflow_count = len(items) - 10
+            items = items[:10]
 
         tx_path = _get_transactions_path()
         workspace_dir = tx_path.parent
@@ -1177,7 +1179,7 @@ def propose_add_transactions(items: list | str) -> str:
 
         log_event("transactions_proposed", {"proposal_id": proposal_id, "count": len(validated_items), "risk": "low"})
 
-        return json.dumps({
+        resp = {
             "proposal_id": proposal_id,
             "kind": "add_transactions",
             "items": validated_items,
@@ -1185,7 +1187,11 @@ def propose_add_transactions(items: list | str) -> str:
             "risk": "low",
             "status": "pending_confirmation",
             "message": f"Proposal {proposal_id} created to add {len(validated_items)} transaction(s).",
-        })
+        }
+        if overflow_count > 0:
+            resp["overflow_count"] = overflow_count
+            resp["message"] = f"Proposal {proposal_id} created for the first 10 items. What would you like to do about the remaining {overflow_count} item(s)?"
+        return json.dumps(resp)
     except Exception as e:
         return json.dumps({"error": str(e), "status": "error"})
 

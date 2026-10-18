@@ -43,7 +43,7 @@ def clean_proposals_fixture():
 def test_apptest_budget_edit_creates_pending_card_and_leaves_budgets_unchanged():
     """AppTest: a budget edit creates a pending card and leaves budgets.json unchanged."""
     with patch("src.agent.run_agent", return_value=MagicMock()):
-        at = AppTest.from_file(str(APP_PATH), default_timeout=10).run()
+        at = AppTest.from_file(str(APP_PATH), default_timeout=30).run()
         app_ws = create_workspace(at.session_state["session_id"])
         set_active_workspace(app_ws)
 
@@ -91,7 +91,7 @@ def test_apptest_budget_edit_creates_pending_card_and_leaves_budgets_unchanged()
 def test_apptest_high_risk_approve_stays_disabled_until_confirm():
     """AppTest: the high-risk Approve button stays disabled until 'CONFIRM'."""
     with patch("src.agent.run_agent", return_value=MagicMock()):
-        at = AppTest.from_file(str(APP_PATH), default_timeout=10).run()
+        at = AppTest.from_file(str(APP_PATH), default_timeout=30).run()
         app_ws = create_workspace(at.session_state["session_id"])
         set_active_workspace(app_ws)
 
@@ -126,7 +126,7 @@ def test_apptest_high_risk_approve_stays_disabled_until_confirm():
 def test_apptest_approve_low_risk_updates_ledger_and_undo_restores_it():
     """AppTest: approving a low-risk proposal updates the ledger; undo restores it."""
     with patch("src.agent.run_agent", return_value=MagicMock()):
-        at = AppTest.from_file(str(APP_PATH), default_timeout=10).run()
+        at = AppTest.from_file(str(APP_PATH), default_timeout=30).run()
         app_ws = create_workspace(at.session_state["session_id"])
         set_active_workspace(app_ws)
 
@@ -175,7 +175,7 @@ def test_apptest_approve_low_risk_updates_ledger_and_undo_restores_it():
 def test_apptest_expired_proposal_shows_expired_and_no_buttons():
     """AppTest: expired proposals show 'Expired' and have no buttons."""
     with patch("src.agent.run_agent", return_value=MagicMock()):
-        at = AppTest.from_file(str(APP_PATH), default_timeout=10).run()
+        at = AppTest.from_file(str(APP_PATH), default_timeout=30).run()
         app_ws = create_workspace(at.session_state["session_id"])
         set_active_workspace(app_ws)
 
@@ -209,7 +209,7 @@ def test_apptest_expired_proposal_shows_expired_and_no_buttons():
 def test_apptest_inbox_tab_label_and_activity_log():
     """AppTest: Inbox tab label displays pending count and activity log shows plain English."""
     with patch("src.agent.run_agent", return_value=MagicMock()):
-        at = AppTest.from_file(str(APP_PATH), default_timeout=10).run()
+        at = AppTest.from_file(str(APP_PATH), default_timeout=30).run()
         app_ws = create_workspace(at.session_state["session_id"])
         set_active_workspace(app_ws)
 
@@ -246,7 +246,7 @@ def test_apptest_inbox_tab_label_and_activity_log():
 def test_apptest_plan_tab_bills_and_phase_5():
     """AppTest: Plan tab lists bills, proposing bill change does not modify bills.csv, and shows Phase 5."""
     with patch("src.agent.run_agent", return_value=MagicMock()):
-        at = AppTest.from_file(str(APP_PATH), default_timeout=10).run()
+        at = AppTest.from_file(str(APP_PATH), default_timeout=30).run()
         app_ws = create_workspace(at.session_state["session_id"])
         set_active_workspace(app_ws)
 

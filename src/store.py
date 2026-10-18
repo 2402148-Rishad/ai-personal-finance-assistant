@@ -874,6 +874,14 @@ def import_transactions(
             rec["id"] = f"t{uuid.uuid4().hex[:10]}"
         if "month" not in rec or not rec["month"]:
             rec["month"] = str(rec.get("date", ""))[:7]
+        if "description" in rec and rec["description"] is not None:
+            try:
+                from src.validators import validate_text
+                ok, clean_d = validate_text(rec["description"])
+                if ok:
+                    rec["description"] = clean_d
+            except Exception:
+                pass
         cleaned_records.append(rec)
 
     new_rows_df = pd.DataFrame(cleaned_records)
@@ -964,6 +972,9 @@ def get_goals(workspace: Path | str | None = None) -> list[dict[str, Any]]:
     except Exception:
         pass
     return []
+
+
+read_goals = get_goals
 
 
 def save_goals(

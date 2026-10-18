@@ -264,6 +264,42 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
         is_whatif_cancel = bool(re.search(r"\bwhat\s+if\b.*\bcancel\b", q_lower))
         is_dup_query = bool(re.search(r"\bduplicates?\b", q_lower))
         is_rescue_query = bool(re.search(r"\b(shortfall|rescue|run\s+out\s+of\s+money|running\s+out\s+of\s+money)\b", q_lower))
+        # 1. Human-only approval refusal
+        if re.search(r"\b(approve|confirm)\b.*\b(in chat|for me|proposal|this)\b", q_lower) or re.search(r"\b(approve|confirm)\s+(the\s+)?proposal\b", q_lower) or re.search(r"\bapprove\s+prop_[a-f0-9]+\b", q_lower):
+            fixed_answer = "Approval is human-only. I cannot approve proposals in chat. Please use the Inbox tab to review and approve or reject proposals."
+            log_event("human_only_refusal", {"question": question, "answer": fixed_answer})
+            convo_history.append(types.Content(role="user", parts=[types.Part.from_text(text=question)]))
+            convo_history.append(types.Content(role="model", parts=[types.Part.from_text(text=fixed_answer)]))
+            convo_history = trim_history(convo_history, max_turns=10)
+            return AgentResult(answer=fixed_answer, tool_calls=[], history=convo_history, status="ok")
+
+        # 2. System prompt or API key refusal
+        if re.search(r"(system prompt|api[ _-]?key|secret key|reveal (your |the )?prompt|show (your |the )?instructions)", q_lower):
+            fixed_answer = "I cannot reveal the system prompt, instructions, or API keys. I can help answer questions about your personal finances."
+            log_event("secret_refusal", {"question": question, "answer": fixed_answer})
+            convo_history.append(types.Content(role="user", parts=[types.Part.from_text(text=question)]))
+            convo_history.append(types.Content(role="model", parts=[types.Part.from_text(text=fixed_answer)]))
+            convo_history = trim_history(convo_history, max_turns=10)
+            return AgentResult(answer=fixed_answer, tool_calls=[], history=convo_history, status="ok")
+
+        # 3. Role elevation refusal
+        if re.search(r"\b(set|change|make)\b.*\b(my\s+role|role\s+to|admin|root|superuser)\b", q_lower):
+            fixed_answer = "I cannot change user roles or elevate permissions. I can help with your personal finances."
+            log_event("role_refusal", {"question": question, "answer": fixed_answer})
+            convo_history.append(types.Content(role="user", parts=[types.Part.from_text(text=question)]))
+            convo_history.append(types.Content(role="model", parts=[types.Part.from_text(text=fixed_answer)]))
+            convo_history = trim_history(convo_history, max_turns=10)
+            return AgentResult(answer=fixed_answer, tool_calls=[], history=convo_history, status="ok")
+
+        # 4. Bulk delete refusal
+        if re.search(r"\bdelete\s+all\b.*\btransactions\b", q_lower):
+            fixed_answer = "I cannot delete all transactions at once. Bulk deletion is not permitted. You can propose deleting transactions individually."
+            log_event("bulk_delete_refusal", {"question": question, "answer": fixed_answer})
+            convo_history.append(types.Content(role="user", parts=[types.Part.from_text(text=question)]))
+            convo_history.append(types.Content(role="model", parts=[types.Part.from_text(text=fixed_answer)]))
+            convo_history = trim_history(convo_history, max_turns=10)
+            return AgentResult(answer=fixed_answer, tool_calls=[], history=convo_history, status="ok")
+
         if any(re.search(pat, q_lower) for pat in out_of_scope_patterns) and not (is_sub_query or is_inquiry_pay or is_whatif_cancel or is_dup_query or is_rescue_query):
             fixed_answer = "I can't move money or connect to your bank. I can show your simulated sandbox balance and bills."
             log_event("out_of_scope_refusal", {"question": question, "answer": fixed_answer})
@@ -562,13 +598,25 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
                         for tc in all_tool_calls
                     )
 
+                    has_overflow = any(
+                        isinstance(tc.get("result"), dict) and tc.get("result", {}).get("overflow_count", 0) > 0
+                        for tc in all_tool_calls
+                    )
                     if has_revision:
                         answer = "Updated. Same card, new values."
+                    elif has_overflow:
+                        answer = "Ready for your OK. Created a proposal for the first 10 items. What would you like to do about the remaining items?"
                     elif has_creation:
                         answer = "Ready for your OK. Nothing is saved until you approve."
 
                 # Remove any Source line from the answer text - Source goes only into 'How I got this'
                 answer = re.sub(r'(?i)\n*\bSource:\s*.*$', '', answer).strip()
+
+                # Scrub any API key from output
+                for key_env in ["FINANCE_EVAL_API_KEY", "GEMINI_API_KEY"]:
+                    k_val = os.getenv(key_env)
+                    if k_val and len(k_val) > 5 and k_val in answer:
+                        answer = answer.replace(k_val, "[REDACTED]")
 
                 # 2.5) final_answer: log the answer text
                 log_event("final_answer", {"answer": answer})

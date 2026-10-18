@@ -309,3 +309,12 @@ def test_golden_scenario_g2(tmp_path, monkeypatch):
     for it in items:
         matched = df_after[(df_after["description"] == it["description"]) & (df_after["amount"] == it["amount"])]
         assert len(matched) >= 1, f"Missing added item {it['description']}"
+
+
+def test_runner_golden_flows():
+    """Verify that all golden flows G1-G5 defined in eval/run_scenarios.py pass."""
+    from eval.run_scenarios import GOLDEN_SCENARIOS, run_single_scenario
+    for sc in GOLDEN_SCENARIOS:
+        res = run_single_scenario(sc, is_live=False)
+        assert res.status == "PASS", f"Scenario {sc.id} ({sc.name}) failed: {res.reason}"
+

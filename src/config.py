@@ -23,8 +23,8 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 
 def get_api_key() -> str:
-    """Read GEMINI_API_KEY from environment, raising RuntimeError if not set."""
-    key = os.getenv("GEMINI_API_KEY")
+    """Read GEMINI_API_KEY or FINANCE_EVAL_API_KEY from environment, raising RuntimeError if not set."""
+    key = os.getenv("FINANCE_EVAL_API_KEY") or os.getenv("GEMINI_API_KEY")
     if not key or not key.strip():
         raise RuntimeError("GEMINI_API_KEY is not set. Add it to .env.")
     return key
