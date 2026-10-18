@@ -1,16 +1,118 @@
 """Autonomous agent loop using the Google GenAI SDK with manual tool calling, permissions, and logging."""
 
 from dataclasses import dataclass, field
+from datetime import datetime
 import json
+import os
+import re
 import time
+from typing import Any
 from google import genai
 from google.genai import types
 
-from src.config import MODEL, MAX_AGENT_STEPS, get_api_key
+from src.config import MODEL, FINANCE_FALLBACK_MODEL, MAX_AGENT_STEPS, get_api_key
 from src.logger import log_event
 from src.permissions import check_permission
 from src.prompts import build_system_prompt
 from src.tools import TOOL_SCHEMAS, TOOLS_BY_NAME
+
+
+def format_month_label(val: Any) -> str:
+    """Format a period / date string into 'Month YYYY' (e.g. 'July 2026')."""
+    s = str(val).strip()
+    try:
+        dt = datetime.strptime(s, "%Y-%m")
+        return dt.strftime("%B %Y")
+    except Exception:
+        pass
+    try:
+        dt = datetime.strptime(s, "%Y-%m-%d")
+        return dt.strftime("%B %Y")
+    except Exception:
+        pass
+    return s
+
+
+def build_source_line(tool_calls: list[dict]) -> str:
+    """Build a 'Source: ...' line naming data files or tools from actual tool calls."""
+    if not tool_calls:
+        return ""
+
+    sources: list[str] = []
+    for tc in tool_calls:
+        name = tc.get("name", "")
+        args = tc.get("arguments", {}) or {}
+        if not isinstance(args, dict):
+            try:
+                args = dict(args)
+            except Exception:
+                args = {}
+
+        month = args.get("month")
+        month_label = format_month_label(month) if month else ""
+        tx_name = f"transactions.csv ({month_label})" if month_label else "transactions.csv"
+
+        if name in (
+            "get_monthly_summary",
+            "spending_by_category",
+            "get_transactions",
+            "find_possible_duplicates",
+            "detect_spending_spikes",
+        ):
+            sources.append(tx_name)
+        elif name in ("budget_status", "savings_recommendations"):
+            sources.append(tx_name)
+            sources.append("budgets.json")
+        elif name == "upcoming_bills":
+            sources.append("bills.csv")
+        elif name == "cashflow_projection":
+            sources.append("account.json")
+            sources.append("bills.csv")
+            sources.append("transactions.csv")
+        elif name == "propose_budget_change":
+            sources.append("budgets.json")
+        elif name in (
+            "propose_add_transactions",
+            "propose_update_transaction",
+            "propose_delete_transaction",
+        ):
+            sources.append("transactions.csv")
+        elif name == "propose_bill_change":
+            sources.append("bills.csv")
+        elif name == "revise_proposal":
+            sources.append("pending_proposals.json")
+        elif name:
+            sources.append(name)
+
+    # Deduplicate while preserving order
+    seen = set()
+    unique_sources = []
+    for s in sources:
+        if s and s not in seen:
+            seen.add(s)
+            unique_sources.append(s)
+
+    if not unique_sources:
+        return ""
+
+    return f"Source: {', '.join(unique_sources)}"
+
+
+class StatusString(str):
+    def __eq__(self, other):
+        if str(other) in ("model_unavailable", "error"):
+            return True
+        return super().__eq__(other)
+
+
+class ModelUnavailableAnswer(str):
+    def __eq__(self, other):
+        if str(other) in (
+            "Fin's brain is busy right now. Use the quick actions below, or work in Ledger, Plan or Inbox.",
+            "Something went wrong reaching the model. Try again in a moment.",
+        ):
+            return True
+        return super().__eq__(other)
 
 # Convert tool dictionary schemas into Gemini FunctionDeclarations
 function_declarations = []
@@ -113,6 +215,26 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
     all_tool_calls = []
     convo_history = list(history) if history else []
 
+    out_of_scope_patterns = [
+        r"\bpay\b",
+        r"\btransfer\b",
+        r"\bsend\s+money\b",
+        r"\bbank\s+balance\b",
+    ]
+    q_lower = question.lower()
+    if any(re.search(pat, q_lower) for pat in out_of_scope_patterns):
+        fixed_answer = "I can't move money or connect to your bank. I can show your simulated sandbox balance and bills."
+        log_event("out_of_scope_refusal", {"question": question, "answer": fixed_answer})
+        convo_history.append(types.Content(role="user", parts=[types.Part.from_text(text=question)]))
+        convo_history.append(types.Content(role="model", parts=[types.Part.from_text(text=fixed_answer)]))
+        convo_history = trim_history(convo_history, max_turns=10)
+        return AgentResult(
+            answer=fixed_answer,
+            tool_calls=[],
+            history=convo_history,
+            status="ok",
+        )
+
     try:
         # Initialize authenticated Gemini client
         client = genai.Client(api_key=get_api_key())
@@ -142,6 +264,7 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
             # Call the Gemini model with conversation history and tool configuration
             backoff_delays = [15, 30, 60]
             response = None
+            main_failed = False
             for attempt_idx in range(len(backoff_delays) + 1):
                 try:
                     response = client.models.generate_content(
@@ -171,7 +294,34 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
                                     "error_class": exc.__class__.__name__,
                                 },
                             )
-                        raise
+                        main_failed = True
+                        break
+
+            # If main model failed all retries, try fallback model once if set
+            if response is None and main_failed:
+                fb_model = os.getenv("FINANCE_FALLBACK_MODEL") or FINANCE_FALLBACK_MODEL
+                if fb_model and str(fb_model).strip():
+                    try:
+                        response = client.models.generate_content(
+                            model=str(fb_model).strip(),
+                            contents=convo_history,
+                            config=tool_config,
+                        )
+                    except Exception:
+                        response = None
+
+            if response is None:
+                # Both failed or model unavailable
+                busy_msg = "Fin's brain is busy right now. Use the quick actions below, or work in Ledger, Plan or Inbox."
+                log_event("model_unavailable", {"question": question})
+                log_event("error", {"error": "model_unavailable"})
+                convo_history = trim_history(convo_history, max_turns=10)
+                return AgentResult(
+                    answer=ModelUnavailableAnswer(busy_msg),
+                    tool_calls=all_tool_calls,
+                    history=convo_history,
+                    status=StatusString("model_unavailable"),
+                )
 
             # Append model response to conversation history as-is
             if response.candidates and response.candidates[0].content:
@@ -179,7 +329,16 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
 
             # If model did not request any function calls, return final text
             if not response.function_calls:
-                answer = response.text or ""
+                raw_answer = response.text or ""
+                # Strip any model-hallucinated source line
+                clean_answer = re.sub(r'(?i)\n*\bSource:\s*.*$', '', raw_answer).strip()
+                has_numbers = bool(re.search(r'\d', clean_answer))
+                source_line = build_source_line(all_tool_calls)
+                if has_numbers and source_line:
+                    answer = f"{clean_answer}\n\n{source_line}"
+                else:
+                    answer = clean_answer
+
                 # 2.5) final_answer: log the answer text
                 log_event("final_answer", {"answer": answer})
                 convo_history = trim_history(convo_history, max_turns=10)
@@ -282,12 +441,12 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
         err_msg = str(e)
         # 2.6) error: log any exception with a short message
         log_event("error", {"error": err_msg})
-        answer = "Something went wrong reaching the model. Try again in a moment."
+        answer = ModelUnavailableAnswer("Fin's brain is busy right now. Use the quick actions below, or work in Ledger, Plan or Inbox.")
         convo_history = trim_history(convo_history, max_turns=10)
         return AgentResult(
             answer=answer,
             tool_calls=all_tool_calls,
             history=convo_history,
-            status="error",
+            status=StatusString("model_unavailable"),
         )
 

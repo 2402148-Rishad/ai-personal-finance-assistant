@@ -32,6 +32,7 @@ from src.store import (
 from src.tools import (
     cashflow_projection,
     get_data_overview,
+    get_monthly_summary,
     spending_by_category,
     upcoming_bills,
     budget_status,
@@ -254,7 +255,8 @@ with left_col:
             before_pending = {str(p.get("id") or p.get("proposal_id")) for p in list_pending(workspace=session_ws)}
             with st.spinner("Fin is thinking..."):
                 result = run_agent(q, history=st.session_state.history)
-            if getattr(result, "status", None) == "error":
+            status_str = str(getattr(result, "status", None))
+            if status_str != "model_unavailable" and getattr(result, "status", None) == "error":
                 raise RuntimeError(result.answer)
 
             # Discover proposal IDs created during this turn
@@ -660,6 +662,111 @@ with right_col:
         simulated_balance = cf_data.get("simulated_sandbox_balance", 0.0)
         covers_all_bills = cf_data.get("covers_all_bills", True)
         st.metric(label="Simulated sandbox balance", value=f"${simulated_balance:,.2f}")
+
+        # Quick actions that need no model
+        st.subheader("Quick actions")
+        qa_col1, qa_col2, qa_col3, qa_col4 = st.columns(4)
+        with qa_col1:
+            btn_sum = st.button("This month's summary", key="qa_btn_summary")
+        with qa_col2:
+            btn_bills = st.button("Upcoming bills", key="qa_btn_bills")
+        with qa_col3:
+            btn_budget = st.button("Budget status", key="qa_btn_budget")
+        with qa_col4:
+            btn_cf = st.button("Cashflow next 30 days", key="qa_btn_cashflow")
+
+        if btn_sum:
+            st.session_state["overview_quick_action"] = "summary"
+        elif btn_bills:
+            st.session_state["overview_quick_action"] = "bills"
+        elif btn_budget:
+            st.session_state["overview_quick_action"] = "budget"
+        elif btn_cf:
+            st.session_state["overview_quick_action"] = "cashflow"
+
+        active_qa = st.session_state.get("overview_quick_action")
+        if active_qa == "summary":
+            st.markdown(f"**This Month's Summary ({selected_month})**")
+            raw_sum = get_monthly_summary(month=selected_month)
+            sum_data = json.loads(raw_sum)
+            t_inc = float(sum_data.get("total_income", 0.0))
+            t_exp = float(sum_data.get("total_expenses", 0.0))
+            n_sav = float(sum_data.get("net_savings", 0.0))
+            s_rate = float(sum_data.get("savings_rate", 0.0))
+            sm1, sm2, sm3, sm4 = st.columns(4)
+            sm1.metric("Income", f"${t_inc:,.2f}")
+            sm2.metric("Expenses", f"${t_exp:,.2f}")
+            sm3.metric("Net Savings", f"${n_sav:,.2f}")
+            sm4.metric("Savings Rate", f"{s_rate:.1f}%")
+            sum_rows = [
+                {"Metric": "Total Income", "Value": f"${t_inc:,.2f}"},
+                {"Metric": "Total Expenses", "Value": f"${t_exp:,.2f}"},
+                {"Metric": "Net Savings", "Value": f"${n_sav:,.2f}"},
+                {"Metric": "Savings Rate", "Value": f"{s_rate:.1f}%"},
+            ]
+            st.table(pd.DataFrame(sum_rows))
+
+        elif active_qa == "bills":
+            st.markdown(f"**Upcoming Bills (Next 30 Days as of {sandbox_today})**")
+            raw_b = upcoming_bills(today=sandbox_today, days_ahead=30)
+            b_data = json.loads(raw_b)
+            bills_list = b_data.get("upcoming_bills", [])
+            if bills_list:
+                b_rows = [
+                    {
+                        "Bill Name": b.get("bill_name"),
+                        "Due Date": b.get("due_date"),
+                        "Amount": f"${float(b.get('amount', 0)):,.2f}",
+                        "Category": b.get("category"),
+                    }
+                    for b in bills_list
+                ]
+                st.table(pd.DataFrame(b_rows))
+            else:
+                st.info("No upcoming bills in the next 30 days.")
+
+        elif active_qa == "budget":
+            st.markdown(f"**Budget Status ({selected_month})**")
+            raw_bs_qa = budget_status(month=selected_month)
+            bs_qa_data = json.loads(raw_bs_qa)
+            cat_map = bs_qa_data.get("status_by_category", {})
+            if cat_map:
+                bs_rows = [
+                    {
+                        "Category": cat,
+                        "Spent": f"${float(info.get('spent', 0)):,.2f}",
+                        "Limit": f"${float(info.get('limit', 0)):,.2f}",
+                        "Remaining": f"${float(info.get('remaining', 0)):,.2f}",
+                        "Status": "Over" if info.get("is_over") else "OK",
+                    }
+                    for cat, info in cat_map.items()
+                ]
+                st.table(pd.DataFrame(bs_rows))
+            else:
+                st.info(f"No budget status found for {selected_month}.")
+
+        elif active_qa == "cashflow":
+            st.markdown(f"**Cashflow Next 30 Days (from {sandbox_today})**")
+            raw_cf_qa = cashflow_projection(today=sandbox_today, days_ahead=30)
+            cf_qa_data = json.loads(raw_cf_qa)
+            sim_bal = float(cf_qa_data.get("simulated_sandbox_balance", 0.0))
+            low_bal = float(cf_qa_data.get("lowest_projected_balance", 0.0))
+            cfm1, cfm2 = st.columns(2)
+            cfm1.metric("Simulated Sandbox Balance", f"${sim_bal:,.2f}")
+            cfm2.metric("Lowest Projected Balance", f"${low_bal:,.2f}")
+            daily_list = cf_qa_data.get("daily_projections", [])
+            if daily_list:
+                cf_table_rows = [
+                    {
+                        "Date": d.get("date"),
+                        "Starting": f"${float(d.get('starting_balance', 0)):,.2f}",
+                        "Income": f"${float(d.get('income', 0)):,.2f}",
+                        "Expenses": f"${float(d.get('expenses', 0)):,.2f}",
+                        "Ending": f"${float(d.get('ending_balance', 0)):,.2f}",
+                    }
+                    for d in daily_list[:10]
+                ]
+                st.table(pd.DataFrame(cf_table_rows))
 
         # Plotly bar chart of spending_by_category(month) in existing style
         raw_spending = spending_by_category(selected_month)

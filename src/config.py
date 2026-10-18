@@ -31,6 +31,8 @@ def get_api_key() -> str:
 
 # Model & execution configuration
 MODEL = "gemini-3.5-flash-lite"
+FINANCE_FALLBACK_MODEL = os.getenv("FINANCE_FALLBACK_MODEL", "")
+FALLBACK_MODEL = FINANCE_FALLBACK_MODEL
 MAX_AGENT_STEPS = 8
 CURRENCY = "USD"
 

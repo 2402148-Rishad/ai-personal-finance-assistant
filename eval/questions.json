@@ -114,5 +114,89 @@
     "question": "How can I save more money in August 2026?",
     "check": "contains",
     "expected": "$377.80"
+  },
+  {
+    "id": "q19",
+    "question": "Add a $12 coffee",
+    "expected_tool": "propose_add_transactions",
+    "tool": "propose_add_transactions",
+    "keywords": [
+      "category"
+    ],
+    "check": "contains",
+    "expected": "category"
+  },
+  {
+    "id": "q20",
+    "question": "Add lunch 12 and bus 3",
+    "expected_tool": "propose_add_transactions",
+    "tool": "propose_add_transactions",
+    "keywords": [
+      "proposal",
+      "lunch",
+      "bus"
+    ],
+    "check": "contains",
+    "expected": [
+      "proposal",
+      "lunch",
+      "bus"
+    ]
+  },
+  {
+    "id": "q21",
+    "question": "No, I meant Dining",
+    "expected_tool": "revise_proposal",
+    "tool": "revise_proposal",
+    "keywords": [
+      "Dining",
+      "proposal"
+    ],
+    "check": "contains",
+    "expected": [
+      "Dining"
+    ]
+  },
+  {
+    "id": "q22",
+    "question": "Pay my rent",
+    "expected_tool": "none",
+    "tool": "none",
+    "keywords": [
+      "cannot",
+      "bank"
+    ],
+    "check": "contains",
+    "expected": [
+      "cannot",
+      "bank"
+    ]
+  },
+  {
+    "id": "q23",
+    "question": "Set my dining budget to 50",
+    "expected_tool": "propose_budget_change",
+    "tool": "propose_budget_change",
+    "keywords": [
+      "proposal",
+      "50"
+    ],
+    "check": "contains",
+    "expected": [
+      "proposal",
+      "50"
+    ]
+  },
+  {
+    "id": "q24",
+    "question": "How much did I spend on dining in January 2025?",
+    "expected_tool": "get_monthly_summary",
+    "tool": "get_monthly_summary",
+    "keywords": [
+      "no data"
+    ],
+    "check": "contains",
+    "expected": "no data"
   }
 ]
+

@@ -2,6 +2,7 @@
 
 import calendar
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 import json
 import os
 from pathlib import Path
@@ -797,6 +798,49 @@ def propose_budget_change(
         return json.dumps({"error": str(e)})
 
 
+def get_most_used_categories(workspace: Any = None) -> list[str]:
+    """Return workspace categories ordered by usage count in transactions.csv, descending."""
+    ws_cats = get_workspace_categories(workspace=workspace)
+    if not ws_cats:
+        return ["Dining", "Groceries", "Transport", "Other"]
+
+    if workspace is not None:
+        tx_path = Path(workspace) / "transactions.csv"
+    else:
+        tx_path = _get_transactions_path()
+
+    counts: dict[str, int] = {c: 0 for c in ws_cats}
+    if tx_path.exists():
+        try:
+            df = pd.read_csv(tx_path)
+            if "category" in df.columns:
+                for c in df["category"].dropna():
+                    c_clean = str(c).strip()
+                    for known in ws_cats:
+                        if known.lower() == c_clean.lower():
+                            counts[known] = counts.get(known, 0) + 1
+                            break
+        except Exception:
+            pass
+
+    return sorted(ws_cats, key=lambda c: (-counts.get(c, 0), c.lower()))
+
+
+def is_vague_amount(amount: Any) -> bool:
+    """Return True if amount is missing or contains vague wording ('about 20', 'a few bucks')."""
+    if amount is None:
+        return True
+    if isinstance(amount, (int, float, Decimal)) and not isinstance(amount, bool):
+        return False
+    s = str(amount).strip().lower()
+    if not s:
+        return True
+    vague_markers = ["about", "few", "around", "approx", "roughly", "couple", "bucks", "some", "estimated", "maybe", "or so", "~"]
+    if any(m in s for m in vague_markers):
+        return True
+    return False
+
+
 def propose_add_transactions(items: list | str) -> str:
     """Propose adding up to 10 new transactions.
 
@@ -849,16 +893,67 @@ def propose_add_transactions(items: list | str) -> str:
             elif cat and str(desc).strip().lower() == str(cat).strip().lower():
                 item["description"] = f"{str(cat).strip()} expense"
 
-            # Check missing fields
+            # 3. A missing date means the sandbox today.
+            raw_date = item.get("date")
+            if not raw_date or not str(raw_date).strip():
+                try:
+                    from src.store import get_sandbox_today
+                    item["date"] = get_sandbox_today(workspace=workspace_dir)
+                except Exception:
+                    item["date"] = "2026-08-31"
+
+            # 3. A vague amount ("about 20", "a few bucks") returns needs_clarification with "missing": ["amount"].
+            raw_amount = item.get("amount")
+            if is_vague_amount(raw_amount):
+                return json.dumps({
+                    "status": "needs_clarification",
+                    "missing": ["amount"],
+                    "options": [],
+                    "message": f"Item {idx + 1} has a vague or missing amount: '{raw_amount}'. Please specify an exact amount.",
+                })
+
+            # 1. Category check: missing or matches more than one workspace category
+            ws_cats = get_workspace_categories(workspace=workspace_dir)
+            raw_cat = item.get("category")
+            is_cat_missing = (raw_cat is None or not str(raw_cat).strip())
+
+            is_cat_ambiguous = False
+            if not is_cat_missing:
+                cat_input = str(raw_cat).strip()
+                exact_m = [c for c in ws_cats if c.lower() == cat_input.lower()]
+                if len(exact_m) == 1:
+                    item["category"] = exact_m[0]
+                else:
+                    matching_cats = [
+                        c for c in ws_cats
+                        if cat_input.lower() in c.lower() or c.lower() in cat_input.lower()
+                    ]
+                    words = [w for w in re.split(r"[\s&/,]+", cat_input.lower()) if len(w) > 1]
+                    word_matches = [
+                        c for c in ws_cats
+                        if any(w in c.lower() for w in words)
+                    ]
+                    combined = list(dict.fromkeys(matching_cats + word_matches))
+                    if len(combined) > 1:
+                        is_cat_ambiguous = True
+
+            if is_cat_missing or is_cat_ambiguous:
+                most_used = get_most_used_categories(workspace=workspace_dir)
+                return json.dumps({
+                    "status": "needs_clarification",
+                    "missing": ["category"],
+                    "options": {"category": most_used},
+                    "message": f"Item {idx + 1} category is missing or matches multiple categories. Please select a category.",
+                })
+
+            # Check other missing fields
             missing_fields = []
-            for req in ("date", "description", "amount", "category", "type"):
+            for req in ("description", "type"):
                 if req not in item or item[req] is None or (isinstance(item[req], str) and not item[req].strip()):
                     missing_fields.append(req)
 
             if missing_fields:
                 options = {}
-                if "category" in missing_fields:
-                    options["category"] = sorted(list(get_workspace_categories(workspace=workspace_dir)))
                 if "type" in missing_fields:
                     options["type"] = ["expense", "income"]
                 return json.dumps({
@@ -898,6 +993,45 @@ def propose_add_transactions(items: list | str) -> str:
             if not ok:
                 return json.dumps({"error": str(desc_val), "status": "error"})
 
+            # 2. Duplicate check: if a probable duplicate exists (same amount and description, dates within 1 day)
+            dup_answer = item.get("duplicate_confirm")
+            if str(dup_answer).strip().lower() in ("cancel", "no"):
+                return json.dumps({
+                    "status": "cancelled",
+                    "message": "Transaction addition cancelled.",
+                })
+
+            has_duplicate_match = False
+            for existing in existing_tx:
+                e_date_str = str(existing.get("date", "")).strip()[:10]
+                e_desc = str(existing.get("description", "")).strip().lower()
+                try:
+                    e_amt = float(existing.get("amount", 0.0))
+                except (ValueError, TypeError):
+                    e_amt = None
+
+                if e_amt is not None and abs(e_amt - amt_val) < 0.001 and e_desc == desc_val.strip().lower():
+                    try:
+                        d1 = datetime.strptime(e_date_str, "%Y-%m-%d").date()
+                        d2 = datetime.strptime(date_val[:10], "%Y-%m-%d").date()
+                        if abs((d1 - d2).days) <= 1:
+                            has_duplicate_match = True
+                            break
+                    except Exception:
+                        pass
+
+            if has_duplicate_match:
+                if str(dup_answer).strip().lower() in ("add anyway", "add", "yes", "true"):
+                    has_duplicate = True
+                    duplicate_warnings.append(f"Transaction on {date_val} for '{desc_val}' (${amt_val:.2f}) matches existing record.")
+                else:
+                    return json.dumps({
+                        "status": "needs_clarification",
+                        "missing": ["duplicate_confirm"],
+                        "options": ["Add anyway", "Cancel"],
+                        "message": f"A probable duplicate transaction was found for '{desc_val}' (${amt_val:.2f}) on or around {date_val}. Do you want to add it anyway?",
+                    })
+
             validated_item = {
                 "date": date_val,
                 "description": desc_val,
@@ -906,20 +1040,6 @@ def propose_add_transactions(items: list | str) -> str:
                 "type": raw_type,
             }
             validated_items.append(validated_item)
-
-            # Check for existing duplicate: same date, description, amount
-            for existing in existing_tx:
-                e_date = str(existing.get("date", "")).strip()
-                e_desc = str(existing.get("description", "")).strip().lower()
-                try:
-                    e_amt = float(existing.get("amount", 0.0))
-                except (ValueError, TypeError):
-                    e_amt = None
-
-                if e_date == date_val and e_desc == desc_val.lower() and e_amt is not None and abs(e_amt - amt_val) < 0.001:
-                    has_duplicate = True
-                    duplicate_warnings.append(f"Transaction on {date_val} for '{desc_val}' (${amt_val:.2f}) matches existing record.")
-                    break
 
         preview = {
             "before": None,
@@ -1273,19 +1393,26 @@ def propose_bill_change(
         return json.dumps({"error": str(e), "status": "error"})
 
 
-def revise_proposal(proposal_id: str, fields: dict | str) -> str:
+def revise_proposal(proposal_id: str, fields: dict | str | None = None, **kwargs) -> str:
     """Revise an existing pending, unexpired proposal before approval (e.g. 'no, make it 40 instead').
 
     Edits only a pending, unexpired proposal. Re-runs validation on all updated fields,
-    resets expires_at to 24 hours later, and does not apply anything. Returns the new preview.
+    resets expires_at to 24 hours later, and does not apply anything. Returns before and after preview.
+    If the proposal is expired or already applied, returns an error and suggests a new proposal.
     """
     try:
-        if isinstance(fields, str):
+        if fields is None:
+            fields = {}
+        elif isinstance(fields, str):
             try:
                 fields = json.loads(fields)
             except Exception:
-                # Try single key-value or number interpretation
-                pass
+                fields = {}
+
+        if isinstance(fields, dict):
+            fields.update(kwargs)
+        else:
+            fields = dict(kwargs)
 
         if not isinstance(fields, dict):
             return json.dumps({"error": "fields must be a dictionary of field-value pairs.", "status": "error"})
@@ -1296,12 +1423,33 @@ def revise_proposal(proposal_id: str, fields: dict | str) -> str:
         proposals = store.read_proposals(workspace=workspace_dir)
         p_id = str(proposal_id).strip()
         if p_id not in proposals:
+            try:
+                audit_records = store.read_audit(workspace=workspace_dir)
+                for r in audit_records:
+                    if r.get("proposal_id") == p_id or r.get("proposal_id") == str(proposal_id):
+                        return json.dumps({
+                            "error": f"Proposal '{proposal_id}' has already been applied and cannot be revised. Please create a new proposal instead.",
+                            "status": "error",
+                        })
+            except Exception:
+                pass
             return json.dumps({"error": f"Proposal '{proposal_id}' not found.", "status": "error"})
 
         proposal = proposals[p_id]
-        if proposal.get("status") != "pending_confirmation":
+        status = proposal.get("status")
+        if status == "applied":
             return json.dumps({
-                "error": f"Proposal '{proposal_id}' is not pending (status: {proposal.get('status')}).",
+                "error": f"Proposal '{proposal_id}' has already been applied and cannot be revised. Please create a new proposal instead.",
+                "status": "error",
+            })
+        if status == "expired":
+            return json.dumps({
+                "error": f"Proposal '{proposal_id}' has expired and cannot be revised. Please create a new proposal instead.",
+                "status": "error",
+            })
+        if status != "pending_confirmation":
+            return json.dumps({
+                "error": f"Proposal '{proposal_id}' is not pending (status: {status}). Please create a new proposal instead.",
                 "status": "error",
             })
 
@@ -1315,7 +1463,7 @@ def revise_proposal(proposal_id: str, fields: dict | str) -> str:
                     store.save_proposal(proposal, workspace=workspace_dir)
                     _sync_legacy_proposals(p_id, proposal)
                     return json.dumps({
-                        "error": f"Proposal '{proposal_id}' has expired and cannot be revised.",
+                        "error": f"Proposal '{proposal_id}' has expired and cannot be revised. Please create a new proposal instead.",
                         "status": "error",
                     })
             except Exception:
@@ -1323,9 +1471,27 @@ def revise_proposal(proposal_id: str, fields: dict | str) -> str:
 
         kind = proposal.get("kind")
         payload = proposal.get("payload", {})
-        preview = proposal.get("preview", {})
+        preview = proposal.get("preview") or {}
+        if not isinstance(preview, dict):
+            preview = {}
 
         if kind == "budget_change":
+            before_val = preview.get("after") if preview.get("after") is not None else proposal.get("new_limit")
+            if before_val is None:
+                before_val = proposal.get("old_limit")
+
+            if "category" in fields and fields["category"] is not None:
+                ok, cat_val = validate_category(fields["category"], workspace=workspace_dir)
+                if not ok:
+                    return json.dumps({"error": str(cat_val), "status": "error"})
+                proposal["category"] = cat_val
+                payload["category"] = cat_val
+                if proposal.get("action") != "add":
+                    budgets = store.read_json("budgets.json", workspace=workspace_dir)
+                    old_limit = float(budgets.get(cat_val, 0.0))
+                    proposal["old_limit"] = old_limit
+                    payload["old_limit"] = old_limit
+
             amt = None
             for k in ("new_limit", "amount", "limit"):
                 if k in fields and fields[k] is not None:
@@ -1355,18 +1521,26 @@ def revise_proposal(proposal_id: str, fields: dict | str) -> str:
                         })
                 proposal["new_limit"] = amt_val
                 payload["new_limit"] = amt_val
-                if isinstance(preview, dict) and "after" in preview:
-                    preview["after"] = amt_val
+                preview["before"] = before_val
+                preview["after"] = amt_val
+            else:
+                preview["before"] = before_val
+                preview["after"] = proposal.get("new_limit")
 
         elif kind == "add_transactions":
             items = payload.get("items", [])
+            import copy
+            before_items = copy.deepcopy(items)
             for it in items:
                 for k, v in fields.items():
-                    if k == "amount":
+                    if k in ("amount", "limit"):
                         ok, val = validate_amount(v)
                         if not ok: return json.dumps({"error": str(val), "status": "error"})
                         it["amount"] = val
                     elif k == "date":
+                        res_d = resolve_period(v)
+                        if isinstance(res_d, str):
+                            v = res_d
                         ok, val = validate_date(v, workspace=workspace_dir)
                         if not ok: return json.dumps({"error": str(val), "status": "error"})
                         it["date"] = val
@@ -1384,32 +1558,37 @@ def revise_proposal(proposal_id: str, fields: dict | str) -> str:
                             return json.dumps({"error": f"Invalid type '{v}'. Must be expense or income.", "status": "error"})
                         it["type"] = str(v).lower()
             payload["items"] = items
-            if isinstance(preview, dict) and "after" in preview:
-                preview["after"] = items
+            preview["before"] = before_items
+            preview["after"] = items
 
         elif kind == "update_transaction":
             current_fields = payload.get("fields", {})
-            current_fields.update(fields)
-            for k, v in list(current_fields.items()):
-                if k == "amount":
+            import copy
+            before_fields = copy.deepcopy(current_fields)
+            for k, v in fields.items():
+                if k in ("amount", "limit"):
                     ok, val = validate_amount(v)
                     if not ok: return json.dumps({"error": str(val), "status": "error"})
-                    current_fields[k] = val
+                    current_fields["amount"] = val
                 elif k == "date":
+                    res_d = resolve_period(v)
+                    if isinstance(res_d, str):
+                        v = res_d
                     ok, val = validate_date(v, workspace=workspace_dir)
                     if not ok: return json.dumps({"error": str(val), "status": "error"})
-                    current_fields[k] = val
+                    current_fields["date"] = val
                 elif k == "category":
                     ok, val = validate_category(v, workspace=workspace_dir)
                     if not ok: return json.dumps({"error": str(val), "status": "error"})
-                    current_fields[k] = val
+                    current_fields["category"] = val
                 elif k == "description":
                     ok, val = validate_text(v)
                     if not ok: return json.dumps({"error": str(val), "status": "error"})
-                    current_fields[k] = val
+                    current_fields["description"] = val
             payload["fields"] = current_fields
             if isinstance(preview, dict) and isinstance(preview.get("after"), dict):
                 preview["after"].update(current_fields)
+            preview["before"] = before_fields
             # Re-evaluate risk
             orig_row = preview.get("before", {}) if isinstance(preview, dict) else {}
             orig_amt = float(orig_row.get("amount", 0.0)) if isinstance(orig_row, dict) else 0.0
@@ -1418,8 +1597,10 @@ def revise_proposal(proposal_id: str, fields: dict | str) -> str:
 
         elif kind == "bill_change":
             bill_data = payload.get("bill", {}) if isinstance(payload.get("bill"), dict) else payload
+            import copy
+            before_bill = copy.deepcopy(bill_data)
             for k, v in fields.items():
-                if k == "amount":
+                if k in ("amount", "limit"):
                     ok, val = validate_amount(v)
                     if not ok: return json.dumps({"error": str(val), "status": "error"})
                     bill_data["amount"] = val
@@ -1427,13 +1608,16 @@ def revise_proposal(proposal_id: str, fields: dict | str) -> str:
                     ok, val = validate_category(v, workspace=workspace_dir)
                     if not ok: return json.dumps({"error": str(val), "status": "error"})
                     bill_data["category"] = val
-                elif k == "bill_name":
+                elif k in ("bill_name", "description"):
                     ok, val = validate_text(v)
                     if not ok: return json.dumps({"error": str(val), "status": "error"})
                     bill_data["bill_name"] = val
-                elif k == "due_day":
+                elif k in ("due_day", "date"):
                     try:
-                        day = int(v)
+                        if isinstance(v, str) and "-" in v:
+                            day = int(v.split("-")[-1])
+                        else:
+                            day = int(v)
                         if day < 1 or day > 31:
                             return json.dumps({"error": f"due_day must be between 1 and 31.", "status": "error"})
                         bill_data["due_day"] = day
@@ -1441,6 +1625,7 @@ def revise_proposal(proposal_id: str, fields: dict | str) -> str:
                         return json.dumps({"error": f"Invalid due_day '{v}'.", "status": "error"})
             if isinstance(preview, dict) and isinstance(preview.get("after"), dict):
                 preview["after"].update(bill_data)
+            preview["before"] = before_bill
 
         # Reset expires_at to 24 hours later
         new_expires = (datetime.now() + timedelta(hours=24)).isoformat()

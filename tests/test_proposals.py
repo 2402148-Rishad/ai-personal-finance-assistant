@@ -220,6 +220,7 @@ def test_duplicate_warning_in_propose_add_transactions(workspace_env):
         "amount": 16.5,
         "category": "Dining",
         "type": "expense",
+        "duplicate_confirm": "Add anyway",
     }])
     data = json.loads(res)
     assert data["status"] == "pending_confirmation"
