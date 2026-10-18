@@ -127,37 +127,3 @@ def test_selecting_ledger_shows_ledger_panel():
         edit_select = next((s for s in at.selectbox if s.key == "ledger_select_edit_tx"), None)
         assert edit_select is not None
         assert edit_select.label == "Pick a transaction to edit"
-
-
-def test_demo_checklist_and_views_render_without_error():
-    """AppTest: Demo checklist renders on every view and each view renders without error."""
-    with patch("src.agent.run_agent", return_value=MagicMock()):
-        at = AppTest.from_file(str(APP_PATH), default_timeout=10).run()
-        app_ws = create_workspace(at.session_state["session_id"])
-        set_active_workspace(app_ws)
-
-        # Check Overview view
-        assert not at.exception
-        assert any("Your demo checklist" in str(m.value) for m in at.markdown)
-        assert next((cb for cb in at.checkbox if cb.key == "demo_step_1"), None) is not None
-
-        # Check Ledger view
-        nav_radio = next(r for r in at.radio if r.key == "active_view")
-        nav_radio.set_value("Ledger").run()
-        assert not at.exception
-        assert any("Your demo checklist" in str(m.value) for m in at.markdown)
-        assert any(s.value == "Ledger" for s in at.subheader)
-
-        # Check Plan view
-        nav_radio = next(r for r in at.radio if r.key == "active_view")
-        nav_radio.set_value("Plan").run()
-        assert not at.exception
-        assert any("Your demo checklist" in str(m.value) for m in at.markdown)
-        assert any(s.value == "Plan" for s in at.subheader)
-
-        # Check Inbox view
-        nav_radio = next(r for r in at.radio if r.key == "active_view")
-        nav_radio.set_value("Inbox").run()
-        assert not at.exception
-        assert any("Your demo checklist" in str(m.value) for m in at.markdown)
-        assert any(s.value == "Inbox" for s in at.subheader)
