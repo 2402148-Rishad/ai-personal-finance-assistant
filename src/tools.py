@@ -44,13 +44,15 @@ except ImportError:
     import store
 
 try:
-    from src.categories import suggest_category
+    from src.categories import suggest_category, category_is_stated
 except ImportError:
     try:
-        from categories import suggest_category
+        from categories import suggest_category, category_is_stated
     except ImportError:
         def suggest_category(text, workspace=None):
             return None
+        def category_is_stated(category, text):
+            return True
 
 
 class JsonDict(str):
@@ -889,6 +891,15 @@ def propose_add_transactions(items: list | str) -> str:
             except Exception:
                 existing_tx = []
 
+        # Category grounding: if category is not stated in recent_user_text, discard it
+        recent_text = store.get_recent_user_text()
+        if recent_text is not None and recent_text.strip():
+            for it in items:
+                if isinstance(it, dict) and "category" in it:
+                    raw_c = it.get("category")
+                    if raw_c and not category_is_stated(raw_c, recent_text):
+                        it["category"] = None
+
         for idx, item in enumerate(items):
             if not isinstance(item, dict):
                 return json.dumps({"error": f"Item at index {idx} must be a dictionary.", "status": "error"})
@@ -960,11 +971,34 @@ def propose_add_transactions(items: list | str) -> str:
                 else:
                     options_list = most_used
 
+                item_label = str(item.get("description") or f"Item {idx + 1}").strip().title()
+                raw_amt = item.get("amount")
+                try:
+                    if raw_amt is not None:
+                        f_amt = float(raw_amt)
+                        amt_clean = int(f_amt) if f_amt.is_integer() else f_amt
+                    else:
+                        amt_clean = 0
+                except Exception:
+                    amt_clean = raw_amt
+
+                pending = []
+                for other_idx in range(idx + 1, len(items)):
+                    other_it = items[other_idx]
+                    if isinstance(other_it, dict):
+                        other_c = other_it.get("category")
+                        if other_c is None or not str(other_c).strip():
+                            other_lbl = str(other_it.get("description") or f"Item {other_idx + 1}").strip().title()
+                            pending.append(other_lbl)
+
                 return json.dumps({
                     "status": "needs_clarification",
                     "missing": ["category"],
+                    "item_label": item_label,
+                    "amount": amt_clean,
                     "options": {"category": options_list},
-                    "message": f"Item {idx + 1} category is missing or matches multiple categories. Please select a category.",
+                    "pending": pending,
+                    "message": f"Which category for {item_label} (${amt_clean})?",
                 })
 
             # Check other missing fields
@@ -1153,10 +1187,43 @@ def propose_update_transaction(transaction_id: str, fields: dict | str) -> str:
 
         # Validate category if present
         if "category" in fields:
-            ok, cat_val = validate_category(fields["category"], workspace=workspace_dir)
-            if not ok:
-                return json.dumps({"error": str(cat_val), "status": "error"})
-            validated_fields["category"] = cat_val
+            cat_input = fields["category"]
+            recent_text = store.get_recent_user_text()
+            if recent_text is not None and recent_text.strip():
+                if cat_input and not category_is_stated(cat_input, recent_text):
+                    del fields["category"]
+                    item_label = str(old_row.get("description") or "Transaction").strip().title()
+                    raw_amt = fields.get("amount") if "amount" in fields else old_row.get("amount", 0.0)
+                    try:
+                        f_amt = float(raw_amt)
+                        amt_clean = int(f_amt) if f_amt.is_integer() else f_amt
+                    except Exception:
+                        amt_clean = raw_amt
+
+                    suggested = suggest_category(old_row.get("description"), workspace=workspace_dir)
+                    most_used = get_most_used_categories(workspace=workspace_dir)
+                    if suggested:
+                        first_opt = f"{suggested} (suggested)"
+                        rest = [c for c in most_used if c.lower() != suggested.lower()]
+                        options_list = [first_opt] + rest
+                    else:
+                        options_list = most_used
+
+                    return json.dumps({
+                        "status": "needs_clarification",
+                        "missing": ["category"],
+                        "item_label": item_label,
+                        "amount": amt_clean,
+                        "options": {"category": options_list},
+                        "pending": [],
+                        "message": f"Which category for {item_label} (${amt_clean})?",
+                    })
+
+            if "category" in fields:
+                ok, cat_val = validate_category(fields["category"], workspace=workspace_dir)
+                if not ok:
+                    return json.dumps({"error": str(cat_val), "status": "error"})
+                validated_fields["category"] = cat_val
 
         # Validate description if present
         if "description" in fields:
@@ -1495,6 +1562,51 @@ def revise_proposal(proposal_id: str, fields: dict | str | None = None, **kwargs
         preview = proposal.get("preview") or {}
         if not isinstance(preview, dict):
             preview = {}
+
+        # Category grounding: if category is not stated in recent_user_text, discard it and treat as missing
+        if "category" in fields and fields["category"] is not None:
+            cat_input = fields["category"]
+            recent_text = store.get_recent_user_text()
+            if recent_text is not None and recent_text.strip():
+                if cat_input and not category_is_stated(cat_input, recent_text):
+                    del fields["category"]
+                    if kind == "add_transactions":
+                        p_items = payload.get("items", [])
+                        f_it = p_items[0] if p_items else {}
+                        item_label = str(f_it.get("description") or "Item").strip().title()
+                        raw_amt = f_it.get("amount", 0.0)
+                    elif kind == "update_transaction":
+                        f_fields = payload.get("fields", {})
+                        item_label = str(f_fields.get("description") or "Transaction").strip().title()
+                        raw_amt = f_fields.get("amount", 0.0)
+                    else:
+                        item_label = str(proposal.get("category") or "Budget").strip().title()
+                        raw_amt = proposal.get("new_limit") or proposal.get("old_limit", 0.0)
+
+                    try:
+                        f_amt = float(raw_amt)
+                        amt_clean = int(f_amt) if f_amt.is_integer() else f_amt
+                    except Exception:
+                        amt_clean = raw_amt
+
+                    suggested = suggest_category(item_label, workspace=workspace_dir)
+                    most_used = get_most_used_categories(workspace=workspace_dir)
+                    if suggested:
+                        first_opt = f"{suggested} (suggested)"
+                        rest = [c for c in most_used if c.lower() != suggested.lower()]
+                        options_list = [first_opt] + rest
+                    else:
+                        options_list = most_used
+
+                    return json.dumps({
+                        "status": "needs_clarification",
+                        "missing": ["category"],
+                        "item_label": item_label,
+                        "amount": amt_clean,
+                        "options": {"category": options_list},
+                        "pending": [],
+                        "message": f"Which category for {item_label} (${amt_clean})?",
+                    })
 
         if kind == "budget_change":
             before_val = preview.get("after") if preview.get("after") is not None else proposal.get("new_limit")

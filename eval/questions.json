@@ -197,6 +197,17 @@
     ],
     "check": "contains",
     "expected": "no data"
+  },
+  {
+    "id": "q25",
+    "question": "Add a $12 coffee",
+    "expected_tool": "propose_add_transactions",
+    "tool": "propose_add_transactions",
+    "keywords": [
+      "category"
+    ],
+    "check": "contains",
+    "expected": "category"
   }
 ]
 

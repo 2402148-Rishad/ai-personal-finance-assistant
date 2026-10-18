@@ -15,6 +15,11 @@ from src.logger import log_event
 from src.permissions import check_permission
 from src.prompts import build_system_prompt
 from src.tools import TOOL_SCHEMAS, TOOLS_BY_NAME
+import src.tools as tools_mod
+try:
+    import src.store as store
+except ImportError:
+    import store
 
 
 def format_month_label(val: Any) -> str:
@@ -208,34 +213,55 @@ def _is_provider_error(exc: Exception) -> bool:
 
 def run_agent(question: str, history: list | None = None) -> AgentResult:
     """Execute the agent loop to answer a user question using available tools, permission checks, and logging."""
-    # 2.1) question: log the user's question at the start of run_agent
-    history_turns = len(history) if history else 0
-    log_event("question", {"question": question, "history_turns": history_turns})
-
-    all_tool_calls = []
-    convo_history = list(history) if history else []
-
-    out_of_scope_patterns = [
-        r"\bpay\b",
-        r"\btransfer\b",
-        r"\bsend\s+money\b",
-        r"\bbank\s+balance\b",
-    ]
-    q_lower = question.lower()
-    if any(re.search(pat, q_lower) for pat in out_of_scope_patterns):
-        fixed_answer = "I can't move money or connect to your bank. I can show your simulated sandbox balance and bills."
-        log_event("out_of_scope_refusal", {"question": question, "answer": fixed_answer})
-        convo_history.append(types.Content(role="user", parts=[types.Part.from_text(text=question)]))
-        convo_history.append(types.Content(role="model", parts=[types.Part.from_text(text=fixed_answer)]))
-        convo_history = trim_history(convo_history, max_turns=10)
-        return AgentResult(
-            answer=fixed_answer,
-            tool_calls=[],
-            history=convo_history,
-            status="ok",
-        )
+    # Category grounding: build recent_user_text from last 6 user messages joined (including question)
+    user_texts = []
+    if history:
+        for msg in history:
+            role = getattr(msg, "role", None) or (msg.get("role") if isinstance(msg, dict) else None)
+            if role == "user":
+                if not _has_function_response(msg):
+                    parts = getattr(msg, "parts", None) or (msg.get("parts") if isinstance(msg, dict) else None)
+                    if parts:
+                        for p in parts:
+                            t = getattr(p, "text", None) or (p.get("text") if isinstance(p, dict) else None)
+                            if t and isinstance(t, str):
+                                user_texts.append(t)
+                    else:
+                        txt = getattr(msg, "text", None) or (msg.get("content") if isinstance(msg, dict) else None)
+                        if txt and isinstance(txt, str):
+                            user_texts.append(txt)
+    user_texts.append(question)
+    recent_joined = "\n".join(user_texts[-6:])
+    token = store.set_recent_user_text(recent_joined)
 
     try:
+        # 2.1) question: log the user's question at the start of run_agent
+        history_turns = len(history) if history else 0
+        log_event("question", {"question": question, "history_turns": history_turns})
+
+        all_tool_calls = []
+        convo_history = list(history) if history else []
+
+        out_of_scope_patterns = [
+            r"\bpay\b",
+            r"\btransfer\b",
+            r"\bsend\s+money\b",
+            r"\bbank\s+balance\b",
+        ]
+        q_lower = question.lower()
+        if any(re.search(pat, q_lower) for pat in out_of_scope_patterns):
+            fixed_answer = "I can't move money or connect to your bank. I can show your simulated sandbox balance and bills."
+            log_event("out_of_scope_refusal", {"question": question, "answer": fixed_answer})
+            convo_history.append(types.Content(role="user", parts=[types.Part.from_text(text=question)]))
+            convo_history.append(types.Content(role="model", parts=[types.Part.from_text(text=fixed_answer)]))
+            convo_history = trim_history(convo_history, max_turns=10)
+            return AgentResult(
+                answer=fixed_answer,
+                tool_calls=[],
+                history=convo_history,
+                status="ok",
+            )
+
         # Initialize authenticated Gemini client
         client = genai.Client(api_key=get_api_key())
 
@@ -332,7 +358,64 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
                 raw_answer = response.text or ""
                 # Strip any model-hallucinated source line
                 clean_answer = re.sub(r'(?i)\n*\bSource:\s*.*$', '', raw_answer).strip()
+                # Safety net: strip ISO timestamp pattern
+                clean_answer = re.sub(r'\d{4}-\d{2}-\d{2}T[\d:.]+', '', clean_answer)
                 answer = clean_answer
+
+                # Check for deterministic replies:
+                # 1. Any tool returned needs_clarification
+                clarification_tc = None
+                for tc in all_tool_calls:
+                    r = tc.get("result")
+                    if isinstance(r, dict) and r.get("status") == "needs_clarification":
+                        clarification_tc = r
+                        break
+
+                if clarification_tc:
+                    item_label = clarification_tc.get("item_label") or "expense"
+                    raw_amt = clarification_tc.get("amount")
+                    try:
+                        if raw_amt is not None:
+                            f_amt = float(raw_amt)
+                            amt_str = f"{int(f_amt)}" if f_amt.is_integer() else f"{f_amt:.2f}"
+                        else:
+                            amt_str = "0"
+                    except Exception:
+                        amt_str = str(raw_amt)
+
+                    raw_opts = clarification_tc.get("options", {})
+                    if isinstance(raw_opts, dict):
+                        opt_list = []
+                        for v in raw_opts.values():
+                            if isinstance(v, list):
+                                opt_list.extend(v)
+                            elif isinstance(v, str):
+                                opt_list.append(v)
+                    elif isinstance(raw_opts, list):
+                        opt_list = raw_opts
+                    else:
+                        opt_list = []
+
+                    num_list = "\n".join(f"{i+1}. {o}" for i, o in enumerate(opt_list))
+                    answer = f"Which category for {item_label} (${amt_str})?\n\n{num_list}"
+                else:
+                    has_revision = any(
+                        tc.get("name") == "revise_proposal" and
+                        isinstance(tc.get("result"), dict) and
+                        tc.get("result", {}).get("status") in ("pending_confirmation", "ok")
+                        for tc in all_tool_calls
+                    )
+                    has_creation = any(
+                        str(tc.get("name", "")).startswith("propose_") and
+                        isinstance(tc.get("result"), dict) and
+                        tc.get("result", {}).get("status") == "pending_confirmation"
+                        for tc in all_tool_calls
+                    )
+
+                    if has_revision:
+                        answer = "Updated. Same card, new values."
+                    elif has_creation:
+                        answer = "Ready for your OK. Nothing is saved until you approve."
 
                 # 2.5) final_answer: log the answer text
                 log_event("final_answer", {"answer": answer})
@@ -351,15 +434,15 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
                 tool_args = call.args or {}
                 if not isinstance(tool_args, dict):
                     tool_args = dict(tool_args)
-
+    
                 # Print tool invocation details to the terminal (never print API keys)
                 print(f"[Tool Call] {tool_name}({tool_args})")
-
+    
                 # 2.2) tool_call: log tool name and arguments before execution
                 log_event("tool_call", {"tool_name": tool_name, "arguments": tool_args})
                 tc_entry = {"name": tool_name, "arguments": tool_args}
                 all_tool_calls.append(tc_entry)
-
+    
                 # Check permissions before running any tool
                 if not check_permission(tool_name):
                     print(f"[Permission Denied] Tool '{tool_name}' execution is blocked by permissions.")
@@ -369,10 +452,11 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
                 else:
                     # Look up and execute the requested tool with error handling
                     try:
-                        if tool_name not in TOOLS_BY_NAME:
+                        target_tools = getattr(tools_mod, "TOOLS_BY_NAME", TOOLS_BY_NAME)
+                        if tool_name not in target_tools:
                             tool_result = {"error": f"Tool '{tool_name}' not found."}
                         else:
-                            raw_result = TOOLS_BY_NAME[tool_name](**tool_args)
+                            raw_result = target_tools[tool_name](**tool_args)
                             parsed_result = json.loads(raw_result)
                             # Ensure the response is wrapped as a dictionary for Gemini
                             if isinstance(parsed_result, dict):
@@ -384,9 +468,9 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
                         # 2.6) error: log exception with a short message
                         log_event("error", {"error": err_msg, "tool_name": tool_name})
                         tool_result = {"error": f"Error running '{tool_name}': {err_msg}"}
-
+    
                 tc_entry["result"] = tool_result
-
+    
                 # 2.3) tool_result: log tool name and result, truncating longer than 1000 characters
                 res_to_log = tool_result
                 if isinstance(res_to_log, (dict, list)):
@@ -395,9 +479,9 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
                         res_to_log = s[:1000]
                 elif isinstance(res_to_log, str) and len(res_to_log) > 1000:
                     res_to_log = res_to_log[:1000]
-
+    
                 log_event("tool_result", {"tool_name": tool_name, "result": res_to_log})
-
+    
                 # Build function response part
                 response_parts.append(
                     types.Part.from_function_response(
@@ -405,7 +489,7 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
                         response=tool_result,
                     )
                 )
-
+    
             # Send all tool results back to the model as a single user message
             convo_history.append(
                 types.Content(
@@ -413,7 +497,7 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
                     parts=response_parts,
                 )
             )
-
+    
         # 2.7) step_limit_reached: log when MAX_AGENT_STEPS is hit
         log_event("step_limit_reached", {"max_steps": MAX_AGENT_STEPS})
         completed_names = [tc["name"] for tc in all_tool_calls]
@@ -444,4 +528,6 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
             history=convo_history,
             status=StatusString("model_unavailable"),
         )
+    finally:
+        store.reset_recent_user_text(token)
 

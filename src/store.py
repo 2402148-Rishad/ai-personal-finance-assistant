@@ -55,6 +55,28 @@ def get_active_workspace() -> Path | None:
     return _ACTIVE_WORKSPACE.get()
 
 
+# ContextVar for recent user messages text (used for category grounding)
+_RECENT_USER_TEXT: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "recent_user_text", default=None
+)
+recent_user_text = _RECENT_USER_TEXT
+
+
+def set_recent_user_text(text: str | None) -> contextvars.Token:
+    """Set the recent user text ContextVar in the current context."""
+    return _RECENT_USER_TEXT.set(text)
+
+
+def reset_recent_user_text(token: contextvars.Token) -> None:
+    """Reset the recent user text ContextVar using the given token."""
+    _RECENT_USER_TEXT.reset(token)
+
+
+def get_recent_user_text() -> str | None:
+    """Get the recent user text ContextVar from the current context."""
+    return _RECENT_USER_TEXT.get()
+
+
 def _handle_remove_readonly(func, path, exc_info):
     """Clear readonly bit and retry file removal on Windows."""
     try:

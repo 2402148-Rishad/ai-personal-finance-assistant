@@ -46,3 +46,69 @@ def suggest_category(text: str | None, workspace: Any = None) -> str | None:
                     return canonical_cat
 
     return None
+
+
+CATEGORY_ALIASES: dict[str, list[str]] = {
+    "Dining": ["dining", "eating out", "eat out", "dine out"],
+    "Groceries": ["groceries", "grocery", "supermarket"],
+    "Transport": ["transport", "transportation", "transit"],
+    "Rent": ["rent", "lease"],
+    "Utilities": ["utilities", "utility", "electric", "electricity", "water", "power", "internet"],
+    "Subscriptions": ["subscriptions", "subscription"],
+    "Shopping": ["shopping"],
+    "Health": ["health", "healthcare", "medical"],
+    "Insurance": ["insurance"],
+}
+
+
+def category_is_stated(category: str | None, text: str | None) -> bool:
+    """Check case-insensitively and whole-word if category is stated in text.
+    
+    Accepts singular and plural forms of the category name and a small alias map.
+    """
+    if not category or not text:
+        return False
+
+    cat_clean = str(category).strip().lower()
+    cat_clean = re.sub(r"\s*\(suggested\)$", "", cat_clean, flags=re.I).strip()
+    if not cat_clean:
+        return False
+
+    text_lower = str(text).lower()
+
+    candidates: set[str] = {cat_clean}
+
+    # Inflections (singular / plural)
+    if cat_clean.endswith("ies"):
+        candidates.add(cat_clean[:-3] + "y")
+    elif cat_clean.endswith("y"):
+        candidates.add(cat_clean[:-1] + "ies")
+
+    if cat_clean.endswith("s") and not cat_clean.endswith("ies"):
+        candidates.add(cat_clean[:-1])
+    elif not cat_clean.endswith("s"):
+        candidates.add(cat_clean + "s")
+
+    # Aliases
+    for k, aliases in CATEGORY_ALIASES.items():
+        if k.lower() == cat_clean or cat_clean in [a.lower() for a in aliases]:
+            for a in aliases:
+                a_low = a.lower()
+                candidates.add(a_low)
+                if a_low.endswith("ies"):
+                    candidates.add(a_low[:-3] + "y")
+                elif a_low.endswith("y"):
+                    candidates.add(a_low[:-1] + "ies")
+                elif a_low.endswith("s"):
+                    candidates.add(a_low[:-1])
+                else:
+                    candidates.add(a_low + "s")
+
+    for cand in candidates:
+        if not cand:
+            continue
+        pattern = rf"\b{re.escape(cand)}\b"
+        if re.search(pattern, text_lower):
+            return True
+
+    return False

@@ -267,6 +267,7 @@ with left_col:
             created_proposal_ids = [pid for pid in after_pending if pid not in before_pending]
 
             clarification_options = []
+            clarification_item_label = None
             for tc in getattr(result, "tool_calls", []):
                 t_res = tc.get("result", {})
                 if isinstance(t_res, dict):
@@ -274,6 +275,8 @@ with left_col:
                     if p_id and p_id not in created_proposal_ids:
                         created_proposal_ids.append(p_id)
                     if t_res.get("status") == "needs_clarification":
+                        if not clarification_item_label and t_res.get("item_label"):
+                            clarification_item_label = t_res.get("item_label")
                         opts = t_res.get("options", {})
                         if isinstance(opts, dict):
                             for opt_list in opts.values():
@@ -295,11 +298,18 @@ with left_col:
                 "tool_calls": getattr(result, "tool_calls", []),
                 "proposal_ids": created_proposal_ids,
                 "clarification_options": clarification_options,
+                "clarification_item_label": clarification_item_label,
+                "clarification_disabled": False,
             })
             st.session_state.input_key += 1
             st.rerun()
         except Exception:
             chat_error_placeholder.error("Couldn't reach the model. Try again in a moment.")
+
+    # Check for pending chat query triggered via on_click callback
+    if st.session_state.get("pending_chat_query"):
+        pending_q = st.session_state.pop("pending_chat_query")
+        handle_chat_submit(pending_q)
 
     # Message area / Empty chat state
     with st.container():
@@ -391,25 +401,63 @@ with left_col:
                                             st.markdown(f"**Key numbers:** {', '.join(key_nums)}")
                                     st.divider()
 
-                                src_line = build_source_line(tool_calls)
-                                if src_line:
-                                    st.markdown(escape_dollars(src_line))
+                                READ_DATA_TOOLS = {
+                                    "get_monthly_summary",
+                                    "spending_by_category",
+                                    "get_transactions",
+                                    "find_possible_duplicates",
+                                    "detect_spending_spikes",
+                                    "budget_status",
+                                    "savings_recommendations",
+                                    "upcoming_bills",
+                                    "cashflow_projection",
+                                    "get_data_overview",
+                                }
+                                has_read_data = any(tc.get("name") in READ_DATA_TOOLS for tc in tool_calls)
+                                has_proposal = bool(item.get("proposal_ids"))
+                                has_clarification = bool(item.get("clarification_options"))
+                                is_refusal = "I can't move money" in a_text or "out of scope" in a_text.lower()
 
-                        # Task 2: Clarification options as clickable chips
+                                if has_read_data and not has_proposal and not has_clarification and not is_refusal:
+                                    src_line = build_source_line(tool_calls)
+                                    if src_line:
+                                        st.markdown(escape_dollars(src_line))
+
+                        # Task 2: Clarification options as full-width buttons in one column
                         clarifications = item.get("clarification_options", [])
                         if clarifications:
                             st.write("**Clarification:**")
-                            cols = st.columns(min(len(clarifications), 4))
+                            item_lbl = item.get("clarification_item_label")
+                            if not item_lbl:
+                                m = re.search(r"Which category for ([^($\n]+)", a_text, flags=re.I)
+                                item_lbl = m.group(1).strip() if m else None
+
+                            is_disabled = item.get("clarification_disabled", False)
                             for c_idx, opt_str in enumerate(clarifications):
-                                with cols[c_idx % len(cols)]:
-                                    if opt_str in ("Add anyway", "Cancel"):
-                                        btn_lbl = opt_str
-                                        send_val = opt_str
+                                if opt_str in ("Add anyway", "Cancel"):
+                                    btn_lbl = opt_str
+                                    send_val = opt_str
+                                else:
+                                    btn_lbl = f"{c_idx + 1} · {opt_str}"
+                                    clean_opt = re.sub(r"\s*\(suggested\)$", "", opt_str, flags=re.I).strip()
+                                    if item_lbl:
+                                        send_val = f"Category for {item_lbl}: {clean_opt}"
                                     else:
-                                        btn_lbl = f"{c_idx + 1}. {opt_str}"
-                                        send_val = f"Category: {opt_str}"
-                                    if st.button(btn_lbl, key=f"clarify_{msg_idx}_{c_idx}"):
-                                        handle_chat_submit(send_val)
+                                        send_val = f"Category: {clean_opt}"
+
+                                def _make_on_click(msg_dict, query):
+                                    def _on_click():
+                                        msg_dict["clarification_disabled"] = True
+                                        st.session_state["pending_chat_query"] = query
+                                    return _on_click
+
+                                st.button(
+                                    btn_lbl,
+                                    key=f"clarify_{msg_idx}_{c_idx}",
+                                    use_container_width=True,
+                                    disabled=is_disabled,
+                                    on_click=_make_on_click(item, send_val),
+                                )
 
                         # Task 1: Inline approval cards
                         prop_ids = item.get("proposal_ids", [])
@@ -512,7 +560,8 @@ with left_col:
                                                     st.info(res.get("message", "Proposal rejected."))
                                                     st.rerun()
 
-                                st.markdown("Want a change? Say it, e.g. 'make it 40' or 'change to Groceries'.")
+                                    if is_pending:
+                                        st.caption("Want a change? Say it, e.g. 'make it 40' or 'change to Groceries'.")
 
     # Send form with placeholder only in the input box
     with st.form(key="chat_form", clear_on_submit=False):

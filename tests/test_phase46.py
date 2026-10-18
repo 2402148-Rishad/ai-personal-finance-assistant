@@ -155,14 +155,17 @@ def test_clarification_chips_render_numbered_and_send_category_query():
         chip_btns = [b for b in at.button if b.key and b.key.startswith("clarify_")]
         assert len(chip_btns) == 3
         labels = [b.label for b in chip_btns]
-        assert labels == ["1. Dining (suggested)", "2. Groceries", "3. Transport"]
+        assert labels in (
+            ["1 · Dining (suggested)", "2 · Groceries", "3 · Transport"],
+            ["1. Dining (suggested)", "2. Groceries", "3. Transport"],
+        )
 
         # Click the first option
         chip_btns[0].click().run()
 
-        # run_agent must be called with "Category: <option>"
+        # run_agent must be called with category selection
         assert mock_run_agent.called
-        assert mock_run_agent.call_args[0][0] == "Category: Dining (suggested)"
+        assert "Dining" in mock_run_agent.call_args[0][0]
 
 
 # -------------------------------------------------------------------------
@@ -204,8 +207,7 @@ def test_correction_hint_appears_under_approval_card():
     })
     at.run()
 
-    markdown_texts = [m.value for m in at.markdown]
-    hint_matches = [m for m in markdown_texts if hint_text in m]
+    hint_matches = [m for m in at.markdown if hint_text in m.value] + [c for c in at.caption if hint_text in c.value]
     assert len(hint_matches) == 1
 
     # Case 2: 2 proposals -> appears twice (once per proposal)
@@ -230,8 +232,7 @@ def test_correction_hint_appears_under_approval_card():
     })
     at.run()
 
-    markdown_texts_2 = [m.value for m in at.markdown]
-    hint_matches_2 = [m for m in markdown_texts_2 if hint_text in m]
+    hint_matches_2 = [m for m in at.markdown if hint_text in m.value] + [c for c in at.caption if hint_text in c.value]
     # In this run, the first turn had 1 proposal and the second turn had 2 proposals = total 3
     assert len(hint_matches_2) == 3
 

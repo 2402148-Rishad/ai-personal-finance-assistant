@@ -8,7 +8,9 @@ import pytest
 if os.getenv("FINANCE_LIVE_TESTS") != "1":
     os.environ["GEMINI_API_KEY"] = "test-key"
 else:
-    os.environ.setdefault("GEMINI_API_KEY", "test-key")
+    from dotenv import load_dotenv
+    from pathlib import Path
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 
 def pytest_collection_modifyitems(config, items):
