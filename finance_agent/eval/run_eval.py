@@ -452,18 +452,6 @@ def evaluate_question(
                 return "PASS", "Contains 'no data' or 'no transactions' (case-insensitive)", ["no data", "no transactions"]
             else:
                 return "FAIL", "Missing 'no data' or 'no transactions' in answer", ["no data", "no transactions"]
-        elif q_id in ("q20", "q23"):
-            tc_text = " ".join(str(tc) for tc in (tool_calls or []))
-            has_prop_tc = any("propose_" in str(tc) for tc in (tool_calls or []))
-            has_in_answer = any(item.lower() in answer.lower() for item in expected)
-            if not has_in_answer:
-                return "FAIL", f"Answer text must contain at least one expected token from {expected}; tool calls cannot replace answer text", expected
-            combined = f"{answer} {tc_text} {'proposal' if has_prop_tc else ''}".lower()
-            missing = [item for item in expected if item.lower() not in combined]
-            if not missing:
-                return "PASS", f"Answer text contains expected token and combined text/tool calls satisfy: {expected}", expected
-            else:
-                return "FAIL", f"Missing required tokens: {missing}", expected
         elif isinstance(expected, list):
             missing = [item for item in expected if item.lower() not in answer.lower()]
             if not missing:

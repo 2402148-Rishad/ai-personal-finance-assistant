@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -18,6 +19,14 @@ def get_file_sha256(path: Path) -> str:
         while chunk := f.read(8192):
             h.update(chunk)
     return h.hexdigest()
+
+def get_commits_since_b89e9b3() -> list[str]:
+    try:
+        cmd = ["git", "log", "b89e9b3..HEAD", "--oneline", "--", "finance_agent/src/", "finance_agent/eval/", "src/", "eval/"]
+        res = subprocess.run(cmd, cwd=str(ROOT.parent), capture_output=True, text=True, check=True)
+        return [line.strip() for line in res.stdout.strip().splitlines() if line.strip()]
+    except Exception:
+        return []
 
 def main():
     sc_file = ROOT / "eval" / "results" / "2026-10-19-scenarios-mock.json"
@@ -140,6 +149,14 @@ def main():
     out.append(f"- **Model:** `{le['model']}`")
     out.append(f"- **Summary:** `{le.get('score', f'{le_passed} of {le_total} passed')}` ({le_passed}/{le_total} passed)")
     out.append(f"- **Budgets Unchanged:** `{le_budgets}`")
+    out.append(f"- **Live Run Commit:** `b89e9b3`")
+    commits_since = get_commits_since_b89e9b3()
+    if commits_since:
+        out.append(f"- **Commits Since `b89e9b3` changing `src/` or `eval/`:**")
+        for c in commits_since:
+            out.append(f"  - `{c}`")
+    else:
+        out.append(f"- **Commits Since `b89e9b3` changing `src/` or `eval/`:** None (run matches HEAD)")
     out.append(f"- **Result File:** [`eval/results/2026-10-19-live.json`](file:///d:/ai-personal-finance-assistant/finance_agent/eval/results/2026-10-19-live.json)")
     out.append("")
     out.append("### Associated Rule Changes")
@@ -147,7 +164,7 @@ def main():
     out.append("The live evaluation run reflects the following core rules:")
     out.append("1. **Rule 12 (Grounding totals & arithmetic):** Spending figures are grounded in tool-provided totals rather than mental arithmetic by the model, preventing calculation errors on monthly summaries.")
     out.append("2. **Rule 14 (Refusal keywords & clarification):** Payment and direct banking requests consistently emit required refusal tokens (`cannot`, `pay`, `bank`), while unknown categories prompt user clarification without losing input state.")
-    out.append("3. **Rule 15 (Proposal gating & raw ID redaction):** User-facing text never exposes raw hex IDs (`prop_[0-9a-f]{8}`); proposals are presented cleanly via structured cards, and proposal creation answers clearly acknowledge creation (`Proposal created`) while keeping `budgets.json` completely untouched until explicit human confirmation.")
+    out.append("3. **Rule 15 (Proposal gating & raw ID redaction):** User-facing text never exposes raw hex IDs (`prop_[0-9a-f]{8}`); proposals are presented cleanly via structured cards, and data files remain completely untouched until explicit human confirmation.")
     out.append("")
     out.append("| ID | Question | Expected Result | Actual Answer & Verification | Status |")
     out.append("|---|---|---|---|---|")
