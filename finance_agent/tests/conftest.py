@@ -76,8 +76,10 @@ def clean_global_proposals():
 
 
 @pytest.fixture(autouse=True)
-def clean_usage_counter():
-    """Ensure usage.json starts clean before and after each test."""
+def clean_usage_counter(tmp_path, monkeypatch):
+    """Ensure usage.json starts clean before and after each test using a temporary path."""
+    test_usage_file = tmp_path / "usage.json"
+    monkeypatch.setenv("FINANCE_USAGE_FILE", str(test_usage_file))
     try:
         from src.usage import reset_usage
         reset_usage()

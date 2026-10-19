@@ -22,8 +22,9 @@ from src.usage import (
 from src.tools import get_transactions, budget_status, upcoming_bills
 
 
-def test_cap_source_precedence(monkeypatch):
+def test_cap_source_precedence(monkeypatch, tmp_path):
     """Verify limit comes from st.secrets first, then environment, then default 200."""
+    monkeypatch.setenv("FINANCE_USAGE_FILE", str(tmp_path / "usage.json"))
     # 1. Default when neither is set
     monkeypatch.delenv("MODEL_DAILY_CAP", raising=False)
     assert get_model_daily_cap() == 200
@@ -207,6 +208,7 @@ def test_deterministic_replies_still_work_at_cap(monkeypatch, tmp_path):
 
 def test_read_tools_work_at_cap(monkeypatch, tmp_path):
     """Read tools must continue to operate directly even when model cap is reached."""
+    monkeypatch.setenv("FINANCE_USAGE_FILE", str(tmp_path / "usage.json"))
     monkeypatch.setenv("MODEL_DAILY_CAP", "0")
 
     # Read tools should execute without error (tools serialize outputs to JSON strings)
