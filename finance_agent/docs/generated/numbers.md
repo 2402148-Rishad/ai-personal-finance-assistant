@@ -5,7 +5,7 @@ All documentation references to counts, timeframes, or thresholds must draw dire
 
 ## Core System Metrics
 
-- **Pytest Collected Tests**: 265 tests
+- **Pytest Collected Tests**: 275 tests
 - **Model Name**: `gemini-3.5-flash-lite`
 - **MAX_AGENT_STEPS**: 8 steps
 - **Proposal Expiry**: 24 hours

@@ -148,7 +148,7 @@ ai-personal-finance-assistant/
 │   ├── live_adversarial.json      # 6 adversarial test cases evaluated against the live Gemini model
 │   └── results/                   # Timestamped result JSON files across evaluation runs
 │
-└── tests/                         # Automated unit, integration, and security test suites (265 tests)
+└── tests/                         # Automated unit, integration, and security test suites (275 tests across 43 test files)
     ├── test_adversarial_model.py  # Scripted-model adversarial attacks (ADV01–ADV18)
     ├── test_analysis.py           # Calculation tests for monthly summary, net savings, cashflow
     ├── test_app_ui.py             # Streamlit UI integration tests
@@ -419,7 +419,7 @@ streamlit run app.py
 
 ### Running Automated Test Suites
 ```bash
-# Run full unit and integration test suite (265 tests across 41 test files)
+# Run full unit and integration test suite (275 tests across 43 test files)
 pytest -q
 
 # Run adversarial and prompt injection tests specifically

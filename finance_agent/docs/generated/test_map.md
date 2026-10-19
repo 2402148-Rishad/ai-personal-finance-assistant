@@ -1,6 +1,6 @@
 # Test Map & Adversarial Coverage Matrix
 
-This project maintains **265 tests** across **41 test files**, verified via `pytest --collect-only -q`.
+This project maintains **275 tests** across **43 test files**, verified via `pytest --collect-only -q`.
 
 ## Test Files and Test Counts
 
@@ -43,11 +43,13 @@ This project maintains **265 tests** across **41 test files**, verified via `pyt
 | `tests/test_phase54.py` | 8 tests | Unit / integration test |
 | `tests/test_phase67_grounding.py` | 6 tests | Grounding verification and fallback metrics |
 | `tests/test_phase68_paraphrases.py` | 22 tests | Paraphrase detection and financial query synonyms |
+| `tests/test_phase69_q24.py` | 2 tests | Unit / integration test |
+| `tests/test_phase71_cap.py` | 8 tests | Unit / integration test |
 | `tests/test_proposals.py` | 9 tests | Human-in-the-loop proposals and undo engine |
 | `tests/test_retry_logging.py` | 3 tests | Unit / integration test |
 | `tests/test_store.py` | 10 tests | Atomic store isolation, validators, and audit trail |
 | `tests/test_tools.py` | 9 tests | Deterministic financial calculation tools |
-| **Total** | **265 tests** | **Full test suite** |
+| **Total** | **275 tests** | **Full test suite** |
 
 ---
 

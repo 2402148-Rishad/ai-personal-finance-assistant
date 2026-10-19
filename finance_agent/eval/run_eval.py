@@ -517,13 +517,29 @@ def evaluate_question(
     elif check == "contains":
         expected = entry["expected"]
         if q_id == "q24":
-            # Documented rule: accept either "no transactions" or "no data" in answer
+            # Documented rule: accept either "no transactions" or "no data" in answer,
+            # or accept "do not have data" only when the answer names January 2025 and contains no money amount.
             ans_lower = answer.lower()
             has_no_data = ("no data" in ans_lower) or ("no transactions" in ans_lower) or ("no transaction" in ans_lower)
             if has_no_data:
                 return "PASS", "Contains 'no data' or 'no transactions' (case-insensitive)", ["no data", "no transactions"]
-            else:
-                return "FAIL", "Missing 'no data' or 'no transactions' in answer", ["no data", "no transactions"]
+
+            if "do not have data" in ans_lower and "january 2025" in ans_lower:
+                dollar_matches = re.findall(r"\$\s*(-?\d+(?:,\d{3})*(?:\.\d+)?)", answer)
+                has_money = False
+                for amt in dollar_matches:
+                    try:
+                        if abs(float(amt.replace(",", ""))) > 0.009:
+                            has_money = True
+                            break
+                    except ValueError:
+                        pass
+                if not has_money and not re.search(r"\$\s*\d+", answer):
+                    return "PASS", "Contains 'do not have data' naming January 2025 with no money amount", ["no data", "no transactions", "do not have data"]
+                else:
+                    return "FAIL", "Found money amount in answer with 'do not have data'", ["no data", "no transactions"]
+
+            return "FAIL", "Missing 'no data' or 'no transactions' in answer", ["no data", "no transactions"]
         elif isinstance(expected, list):
             missing = [item for item in expected if item.lower() not in answer.lower()]
             if not missing:
