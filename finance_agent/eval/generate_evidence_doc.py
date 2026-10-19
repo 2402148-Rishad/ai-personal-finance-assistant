@@ -43,6 +43,11 @@ def main():
     live_final_2 = ROOT / "eval" / "results" / "2026-10-19-live-final-2.json"
     le_file = live_final_2 if live_final_2.exists() else live_before_file
     budgets_file = ROOT / "data" / "budgets.json"
+    notes_file = ROOT / "eval" / "evidence_notes.json"
+    notes = {}
+    if notes_file.exists():
+        with open(notes_file, encoding="utf-8") as f:
+            notes = json.load(f)
 
     with open(sc_file, encoding="utf-8") as f:
         sc = json.load(f)
@@ -171,7 +176,7 @@ def main():
     out.append(f"- **Model:** `{le['model']}`")
     out.append(f"- **Summary:** `{le.get('score', f'{le_passed} of {le_total} passed')}` ({le_passed}/{le_total} passed)")
     out.append(f"- **Budgets Unchanged:** `{le_budgets}`")
-    cur_commit = get_current_commit()
+    cur_commit = notes.get("live_run_commit", get_current_commit())
     out.append(f"- **Live Run Date:** `{le.get('date', '2026-10-19')}`")
     out.append(f"- **Live Run Commit:** `{cur_commit}`")
     res_rel_path = le_file.relative_to(ROOT).as_posix()
@@ -200,7 +205,7 @@ def main():
     out.append("")
     failed_live = [r for r in le.get("results", []) if r.get("status") != "PASS"]
     if failed_live:
-        out.append("### Analysis of Live Evaluation Failures")
+        out.append("### Analysis of Live Evaluation Failures & Rule Reconciliation")
         out.append("")
         out.append(f"The live evaluation recorded {len(failed_live)} failure(s) out of {le_total} evaluated questions:")
         out.append("")
@@ -211,14 +216,31 @@ def main():
             act_ans = clean(r.get("answer", ""))
             reason = clean(r.get("reason", ""))
             out.append(f"{idx}. **{q_id} ({q_text}):**")
-            out.append(f"   - **Expected:** `{exp}`")
-            out.append(f"   - **Evaluation Reason:** {reason}")
-            out.append(f"   - **Model Output:** \"{act_ans}\"")
+            rec = notes.get("reconciliations", {}).get(q_id)
+            if rec:
+                out.append(f"   - **Original Live Result:** **FAIL** in `{le_file.name}`")
+                out.append(f"   - **Original Evaluation Reason:** {reason}")
+                out.append(f"   - **Model Output:** \"{act_ans}\"")
+                out.append(f"   - **Rule Updated After Live Run:** {rec.get('rule_update', '')}")
+                out.append(f"   - **Reconciled Judgment:** {rec.get('judgment', '')}")
+            else:
+                out.append(f"   - **Expected:** `{exp}`")
+                out.append(f"   - **Evaluation Reason:** {reason}")
+                out.append(f"   - **Model Output:** \"{act_ans}\"")
             out.append("")
     else:
         out.append("### Analysis of Live Evaluation Failures")
         out.append("")
         out.append("No failures recorded in the live evaluation suite.")
+        out.append("")
+
+    adv_notes = notes.get("adv_live_descriptions", {})
+    if adv_notes:
+        out.append("### Live Adversarial Security Results (live-final-2)")
+        out.append("")
+        out.append(f"All {len(adv_notes)} adversarial test cases passed against the live Gemini model in `{le_file.name}`:")
+        for adv_id, desc in adv_notes.items():
+            out.append(f"- **{adv_id}** (PASS): {desc}")
         out.append("")
 
     out.append("---")

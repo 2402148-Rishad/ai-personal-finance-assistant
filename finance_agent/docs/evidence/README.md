@@ -168,8 +168,8 @@ The live evaluation recorded 1 failure(s) out of 31 evaluated questions:
    - **Original Live Result:** **FAIL** in `2026-10-19-live-final-2.json`
    - **Original Evaluation Reason:** Missing 'no data' or 'no transactions' in answer
    - **Model Output:** "I do not have data for January 2025. The available data covers June 2026 to August 2026."
-   - **Rule Updated After Live Run:** In Phase 6.9, the evaluation check in `eval/run_eval.py` was documented to accept "do not have data" only when the answer explicitly names January 2025 and contains no money amount (preserving strict protection against invented figures).
-   - **Reconciled Judgment:** The model output correctly refused to invent financial figures for an out-of-range period and correctly cited the target date; under the documented Phase 6.9 rule, the answer is judged correct. The original benchmark table above preserves the historical **FAIL** record for audit integrity.
+   - **Rule Updated After Live Run:** In Phase 6.9, the evaluation check in eval/run_eval.py was documented to accept "do not have data" only when the answer explicitly names January 2025 and contains no money amount (preserving strict protection against invented figures).
+   - **Reconciled Judgment:** The model output correctly refused to invent financial figures for an out-of-range period and correctly cited the target date; under the documented Phase 6.9 rule, the answer is judged correct. The original benchmark table above preserves the historical FAIL record for audit integrity.
 
 ### Live Adversarial Security Results (live-final-2)
 
