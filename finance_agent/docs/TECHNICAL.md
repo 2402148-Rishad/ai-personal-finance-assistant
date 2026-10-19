@@ -79,7 +79,7 @@ sequenceDiagram
 
     User->>UI: Enter message (e.g. "Add $25 for dining")
     UI->>Agent: run_agent(question, history)
-    Agent->>Agent: Check daily model cap & deterministic pre-filters
+    Agent->>Agent: Check deterministic pre-filters (out-of-scope & refusals)
     Agent->>Model: generate_content(contents, tools=agent_tool)
     Model-->>Agent: FunctionCall propose_add_transactions(items)
     Agent->>Agent: check_permission("propose_add_transactions") -> Tier.PROPOSE
@@ -391,13 +391,8 @@ The Streamlit interface (`app.py`) is structured for mobile usability and intuit
 ## 10. Deployment & Operational Readiness
 
 - **Platform**: Hosted on Streamlit Community Cloud running Python 3.11+.
-- **Secrets Management**: Read securely from `st.secrets` (`GEMINI_API_KEY`, `MODEL_DAILY_CAP`). Falls back to environment variables or local `.env` in development.
-- **Global Daily Model-Call Cap**:
-  - To prevent unexpected API exhaustion, Fin tracks daily Gemini calls in the daily usage file (data/usage.json).
-  - Cap limit resolution: `st.secrets["MODEL_DAILY_CAP"]` -> `os.environ["MODEL_DAILY_CAP"]` -> default 200 calls.
-  - Counter increments atomically with each model call under a thread-safe reentrant lock (`_USAGE_LOCK`).
-  - Resets daily based on calendar date in the Asia/Dhaka time zone.
-  - When the daily cap is reached, Fin blocks the model and returns: *"The daily assistant limit is reached. Your ledger, plan, alerts and sandbox tools still work."* All deterministic read tools, budget views, and ledger operations continue to function.
+- **Secrets Management**: Read securely from `st.secrets` (`GEMINI_API_KEY`). Falls back to environment variables or local `.env` in development.
+
 
 ---
 
