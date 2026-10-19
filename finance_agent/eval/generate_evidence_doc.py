@@ -39,8 +39,9 @@ def get_commits_since_b89e9b3() -> list[str]:
 def main():
     sc_file = ROOT / "eval" / "results" / "2026-10-19-scenarios-mock.json"
     me_file = ROOT / "eval" / "results" / "2026-10-19-mock.json"
-    live_final = ROOT / "eval" / "results" / "2026-10-19-live-final.json"
-    le_file = live_final if live_final.exists() else ROOT / "eval" / "results" / "2026-10-19-live.json"
+    live_before_file = ROOT / "eval" / "results" / "2026-10-19-live-final.json"
+    live_final_2 = ROOT / "eval" / "results" / "2026-10-19-live-final-2.json"
+    le_file = live_final_2 if live_final_2.exists() else live_before_file
     budgets_file = ROOT / "data" / "budgets.json"
 
     with open(sc_file, encoding="utf-8") as f:
@@ -49,6 +50,10 @@ def main():
         me = json.load(f)
     with open(le_file, encoding="utf-8") as f:
         le = json.load(f)
+    le_before = None
+    if live_before_file.exists():
+        with open(live_before_file, encoding="utf-8") as f:
+            le_before = json.load(f)
 
     # Dynamic metrics computation
     golden_results = [r for r in sc.get("results", []) if r.get("category") == "golden"]
@@ -98,7 +103,14 @@ def main():
     out.append(f"| Scenario Runner (Adversarial ADV01–ADV18) | {sc['date']} | {sc['model']} (mock) | {a_passed} | {a_failed} | {a_total} | {a_rate} | {a_status} |")
     out.append(f"| **Combined Scenarios (G1–G5 + ADV01–ADV18)** | {sc['date']} | {sc['model']} (mock) | {sc_passed} | {sc_failed} | {sc_total} | **{sc_rate}** | **{sc_status}** |")
     out.append(f"| Automated Evaluation Benchmark (q01–q25 + adv_live_01–06) | {me['date']} | {me['model']} (mock) | {me_passed} | {me_failed} | {me_total} | **{me_rate}** | **{me_budgets}** |")
-    out.append(f"| Automated Evaluation Benchmark (q01–q25 + adv_live_01–06) | {le['date']} | {le['model']} (live) | {le_passed} | {le_failed} | {le_total} | **{le_rate}** | **{le_budgets}** |")
+    if le_before:
+        leb_total = le_before.get("total", len(le_before.get("results", [])))
+        leb_passed = le_before.get("passed", sum(1 for r in le_before.get("results", []) if r.get("status") == "PASS"))
+        leb_failed = le_before.get("failed", sum(1 for r in le_before.get("results", []) if r.get("status") == "FAIL"))
+        leb_rate = f"{(leb_passed / leb_total * 100):.1f}%" if leb_total > 0 else "N/A"
+        leb_budgets = str(le_before.get("budgets_unchanged", "PASS" if le_before.get("errors", 0) == 0 else "UNKNOWN"))
+        out.append(f"| Automated Evaluation Benchmark (before 6.7 fix) | {le_before['date']} | {le_before['model']} (live) | {leb_passed} | {leb_failed} | {leb_total} | **{leb_rate}** | **{leb_budgets}** |")
+    out.append(f"| **Automated Evaluation Benchmark (final live run on 6.8 commit)** | {le['date']} | {le['model']} (live) | {le_passed} | {le_failed} | {le_total} | **{le_rate}** | **{le_budgets}** |")
     out.append("")
     out.append("> [!NOTE]")
     out.append(f"> All evaluation runs execute inside isolated temporary workspaces (`create_workspace()` and `set_active_workspace()`). The baseline production budget file (`data/budgets.json`) was cryptographically verified (SHA-256: `{budgets_sha256}`) to be completely untouched before and after every suite execution.")
@@ -152,8 +164,9 @@ def main():
     out.append("")
     out.append("---")
     out.append("")
-    out.append("## 4. Live Model Evaluation Suite: Benchmark Questions (q01–q25) & Adversarial Cases (adv_live_01–06)")
+    out.append("## 4. Final Live Model Evaluation Suite: Benchmark Questions (q01–q25) & Adversarial Cases (adv_live_01–06) on 6.8 Commit")
     out.append("")
+    out.append(f"- **Run Description:** Final live run on the 6.8 commit")
     out.append(f"- **Date:** `{le['date']}`")
     out.append(f"- **Model:** `{le['model']}`")
     out.append(f"- **Summary:** `{le.get('score', f'{le_passed} of {le_total} passed')}` ({le_passed}/{le_total} passed)")
@@ -163,6 +176,9 @@ def main():
     out.append(f"- **Live Run Commit:** `{cur_commit}`")
     res_rel_path = le_file.relative_to(ROOT).as_posix()
     out.append(f"- **Result File:** [`{res_rel_path}`](file:///d:/ai-personal-finance-assistant/finance_agent/{res_rel_path})")
+    if le_before:
+        bef_rel_path = live_before_file.relative_to(ROOT).as_posix()
+        out.append(f"- **Earlier Live Result (before 6.7 fix):** [`{bef_rel_path}`](file:///d:/ai-personal-finance-assistant/finance_agent/{bef_rel_path}) ({le_before.get('passed', 25)}/{le_before.get('total', 31)} passed)")
     out.append("")
     out.append("### Associated Rule Changes")
     out.append("")
