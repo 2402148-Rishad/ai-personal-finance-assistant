@@ -20,6 +20,10 @@ try:
     import src.store as store
 except ImportError:
     import store
+try:
+    from src.usage import check_and_increment_daily_cap, CAP_MESSAGE
+except ImportError:
+    from usage import check_and_increment_daily_cap, CAP_MESSAGE
 
 
 def format_month_label(val: Any) -> str:
@@ -355,6 +359,19 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
 
         # Run the loop up to MAX_AGENT_STEPS turns
         for step in range(MAX_AGENT_STEPS):
+            # Check daily model-call cap before each request
+            allowed, current_calls = check_and_increment_daily_cap()
+            if not allowed:
+                log_event("daily_cap_reached", {"question": question, "calls": current_calls})
+                convo_history.append(types.Content(role="model", parts=[types.Part.from_text(text=CAP_MESSAGE)]))
+                convo_history = trim_history(convo_history, max_turns=10)
+                return AgentResult(
+                    answer=CAP_MESSAGE,
+                    tool_calls=all_tool_calls,
+                    history=convo_history,
+                    status="ok",
+                )
+
             # Call the Gemini model with conversation history and tool configuration
             backoff_delays = [15, 30, 60]
             response = None
@@ -395,14 +412,16 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
             if response is None and main_failed:
                 fb_model = os.getenv("FINANCE_FALLBACK_MODEL") or FINANCE_FALLBACK_MODEL
                 if fb_model and str(fb_model).strip():
-                    try:
-                        response = client.models.generate_content(
-                            model=str(fb_model).strip(),
-                            contents=convo_history,
-                            config=tool_config,
-                        )
-                    except Exception:
-                        response = None
+                    allowed_fb, _ = check_and_increment_daily_cap()
+                    if allowed_fb:
+                        try:
+                            response = client.models.generate_content(
+                                model=str(fb_model).strip(),
+                                contents=convo_history,
+                                config=tool_config,
+                            )
+                        except Exception:
+                            response = None
 
             if response is None:
                 # Both failed or model unavailable

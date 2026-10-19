@@ -75,3 +75,20 @@ def clean_global_proposals():
         pass
 
 
+@pytest.fixture(autouse=True)
+def clean_usage_counter():
+    """Ensure usage.json starts clean before and after each test."""
+    try:
+        from src.usage import reset_usage
+        reset_usage()
+    except Exception:
+        pass
+    yield
+    try:
+        from src.usage import reset_usage
+        reset_usage()
+    except Exception:
+        pass
+
+
+
