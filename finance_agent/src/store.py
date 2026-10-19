@@ -12,6 +12,7 @@ import shutil
 import stat
 import tempfile
 import threading
+import time
 from typing import Any
 import uuid
 import pandas as pd
@@ -263,6 +264,7 @@ def write_json_atomic(
     obj: Any,
     data_dir: Path | str | None = None,
     workspace: Path | str | None = None,
+    allow_shared: bool = False,
     **kwargs,
 ) -> Path:
     """Write an object atomically to a JSON file in the active data directory.
@@ -272,7 +274,8 @@ def write_json_atomic(
     """
     path = resolve_path(name, data_dir=workspace or data_dir)
     target_dir = path.parent
-    _check_write_allowed(target_dir)
+    if not allow_shared and path.name != "usage.json":
+        _check_write_allowed(target_dir)
 
     target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -291,7 +294,18 @@ def write_json_atomic(
             json.dump(obj, temp_file, indent=indent, **json_kwargs)
             temp_file.flush()
             temp_file.close()
-            os.replace(temp_path, path)
+
+            # On Windows, os.replace can intermittently raise PermissionError if the target file
+            # is being accessed by a virus scanner, search indexer, or recently closed handle.
+            for attempt in range(20):
+                try:
+                    os.replace(temp_path, path)
+                    break
+                except PermissionError:
+                    if attempt == 19:
+                        raise
+                    time.sleep(0.005 * (attempt + 1))
+
             return path
         except Exception:
             try:
