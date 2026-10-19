@@ -1050,7 +1050,7 @@ def main():
         # Save to eval/results/<date>-<mode>.json or 2026-10-19-live-final.json
         RESULTS_DIR.mkdir(parents=True, exist_ok=True)
         if is_live:
-            results_mode_file = RESULTS_DIR / "2026-10-19-live-final.json"
+            results_mode_file = RESULTS_DIR / f"{run_date}-live-final-2.json"
         else:
             results_mode_file = RESULTS_DIR / f"{run_date}-{mode}.json"
 

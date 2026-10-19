@@ -288,8 +288,7 @@ def test_adv_live_05_read_tool_enforced_when_model_answers_without_tool(workspac
     assert "510.00" in res.answer
     assert "407.31" in res.answer
     assert "Dining" in res.answer
-    assert "Groceries" in res.answer
-    assert "The figure needs the data to be checked against your transaction records." in res.answer
+    assert "I checked these figures against your records: Dining $510.00, Groceries $407.31." in res.answer
 
     # Assert "Your spending total was" never appears
     assert "Your spending total was" not in res.answer

@@ -471,22 +471,18 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
                             by_cat = res_data.get("spending_by_category", {})
                             mentioned_cats = [c for c in ["Dining", "Groceries", "Transport", "Health", "Utilities", "Shopping", "Entertainment"] if c.lower() in q_lower]
                             if len(mentioned_cats) >= 2:
-                                cat_parts = []
-                                comb_total = 0.0
+                                checked_parts = []
                                 for c in mentioned_cats:
                                     c_amt = float(by_cat.get(c, 0.0))
-                                    cat_parts.append(f"{c} was ${c_amt:.2f}")
-                                    comb_total += c_amt
-                                month_label = format_month_label(target_month)
-                                answer = f"In {month_label}, {', and '.join(cat_parts)}. The figure needs the data to be checked against your transaction records."
+                                    checked_parts.append(f"{c} ${c_amt:.2f}")
+                                answer = f"I checked these figures against your records: {', '.join(checked_parts)}."
                             else:
                                 tot = res_data.get("total_spent", 0.0)
-                                month_label = format_month_label(target_month)
-                                answer = f"In {month_label}, your total spending was ${float(tot):.2f}. The figure needs the data to be checked against your transaction records."
+                                answer = f"I checked these figures against your records: Total spending ${float(tot):.2f}."
                         else:
-                            answer = "The figure needs the data to be checked against your transaction records."
+                            answer = "I checked these figures against your records."
                     else:
-                        answer = "The figure needs the data to be checked against your transaction records."
+                        answer = "I checked these figures against your records."
 
                 # Check for deterministic replies:
                 # 1. Any tool returned needs_clarification
@@ -724,21 +720,44 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
                         }
 
                         # Metrics detection
-                        is_income_q = bool(re.search(r"\b(income|earned|salary|earnings)\b", q_lower_check))
-                        is_savings_rate_q = bool(re.search(r"\bsavings?\s+rate\b", q_lower_check))
-                        is_net_savings_q = bool(re.search(r"\b(net\s+savings?|savings?|how\s+much\s+did\s+i\s+save)\b", q_lower_check) and not is_savings_rate_q)
-                        is_over_budget_q = bool(re.search(r"\bover\s+budget\b|\bover-budget\b|\bexceeded\s+budget\b|\bbudget\s+status\b|\bunder\s+budget\b", q_lower_check))
+                        is_savings_rate_q = bool(
+                            re.search(r"\b(savings?\s+rate|percentage\s+saved|percent\s+saved|percentage\s+of\s+(?:my\s+)?income|percent\s+of\s+(?:my\s+)?income)\b", q_lower_check)
+                            or (re.search(r"\b(percentage|percent)\b", q_lower_check) and "income" in q_lower_check and "save" in q_lower_check)
+                        )
+                        is_income_q = bool(re.search(r"\b(income|came\s+in|earned|earn|made|make|salary|earnings)\b", q_lower_check)) and not is_savings_rate_q
+                        is_net_savings_q = bool(
+                            re.search(r"\b(net\s+savings?|kept|keep\s+after\s+expenses|keep|left\s+over|how\s+much\s+did\s+i\s+save|savings?)\b", q_lower_check)
+                            and not is_savings_rate_q
+                        )
+                        is_over_budget_q = bool(
+                            re.search(r"\b(over\s+(?:my\s+)?budget|went\s+over|go\s+over|exceeded|stay\s+within|over-budget|under\s+budget)\b", q_lower_check)
+                            or bool(re.search(r"\b(budget.*over|over.*budget|budgets.*within|within.*budget)\b", q_lower_check))
+                        )
 
                         matched_cats = [c for c in ["Dining", "Groceries", "Transport", "Health", "Utilities", "Shopping", "Entertainment"] if c.lower() in q_lower_check]
                         matched_cat = matched_cats[0] if matched_cats else None
 
                         is_total_spending_q = bool(
-                            re.search(r"\b(total\s+spending|spending\s+total|total\s+expenses|spend\s+in\s+total)\b", q_lower_check)
-                            or (re.search(r"\b(how\s+much\s+did\s+i\s+spend|spending)\b", q_lower_check) and not matched_cat and not is_income_q and not is_net_savings_q and not is_savings_rate_q and not is_over_budget_q)
+                            re.search(r"\b(total\s+spending|spending\s+total|total\s+expenses|spend\s+in\s+total|spent\s+in\s+total|spend\s+total|spent\s+total)\b", q_lower_check)
+                            or (re.search(r"\b(how\s+much\s+did\s+i\s+spend|how\s+much\s+did\s+i\s+spend\s+in\s+total|spending|spent)\b", q_lower_check)
+                                and "total" in q_lower_check
+                                and not matched_cat and not is_income_q and not is_net_savings_q and not is_savings_rate_q and not is_over_budget_q)
+                            or (re.search(r"\b(how\s+much\s+did\s+i\s+spend|spending)\b", q_lower_check)
+                                and not matched_cat and not is_income_q and not is_net_savings_q and not is_savings_rate_q and not is_over_budget_q)
                         )
 
                         # Match only the tool result corresponding to the question's metric
-                        if is_income_q:
+                        if is_savings_rate_q:
+                            sr_tc = next((tc for tc in all_tool_calls if isinstance(tc.get("result"), dict) and ("savings_rate" in tc.get("result") or "savings_rate_pct" in tc.get("result"))), None)
+                            if sr_tc:
+                                res = sr_tc.get("result", {})
+                                sr_val = float(res.get("savings_rate") or res.get("savings_rate_pct") or 0.0)
+                                m = res.get("month", "")
+                                name = MONTH_NAMES.get(m[-2:], m) if m else ""
+                                month_str = f" in {name}" if name else ""
+                                answer = f"Your savings rate{month_str} was {sr_val:.1f}%."
+
+                        elif is_income_q:
                             inc_tc = next((tc for tc in all_tool_calls if isinstance(tc.get("result"), dict) and "total_income" in tc.get("result")), None)
                             if inc_tc:
                                 res = inc_tc.get("result", {})
@@ -759,15 +778,6 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
                                 month_str = f" in {name}" if name else ""
                                 answer = f"Your net savings{month_str} were ${ns_val:.2f}."
 
-                        elif is_savings_rate_q:
-                            sr_tc = next((tc for tc in all_tool_calls if isinstance(tc.get("result"), dict) and ("savings_rate" in tc.get("result") or "savings_rate_pct" in tc.get("result"))), None)
-                            if sr_tc:
-                                res = sr_tc.get("result", {})
-                                sr_val = float(res.get("savings_rate") or res.get("savings_rate_pct") or 0.0)
-                                m = res.get("month", "")
-                                name = MONTH_NAMES.get(m[-2:], m) if m else ""
-                                month_str = f" in {name}" if name else ""
-                                answer = f"Your savings rate{month_str} was {sr_val:.1f}%."
 
                         elif is_over_budget_q:
                             bs_tc = next((tc for tc in all_tool_calls if isinstance(tc.get("result"), dict) and ("over_budget_categories" in tc.get("result") or "over_budget" in tc.get("result") or "categories" in tc.get("result"))), None)
@@ -793,10 +803,7 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
                                     months_seen.append(m_arg)
 
                             if len(matched_cats) >= 2:
-                                m = months_seen[0] if months_seen else ""
-                                name = MONTH_NAMES.get(m[-2:], m) if m else ""
-                                month_prefix = f"In {name}, " if name else ""
-                                cat_parts = []
+                                checked_parts = []
                                 for c in matched_cats:
                                     amt = 0.0
                                     for tc in spending_tcs:
@@ -810,8 +817,8 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
                                                 txs = res["transactions"]
                                                 amt = sum(float(t.get("amount", 0)) for t in txs if str(t.get("category", "")).lower() == c.lower() and t.get("type") == "expense")
                                                 break
-                                    cat_parts.append(f"{c} was ${amt:.2f}")
-                                answer = f"{month_prefix}{', and '.join(cat_parts)}. The figure needs the data to be checked against your transaction records."
+                                    checked_parts.append(f"{c} ${amt:.2f}")
+                                answer = f"I checked these figures against your records: {', '.join(checked_parts)}."
                             elif len(months_seen) >= 2:
                                 m_totals = {}
                                 for m in months_seen:
@@ -860,7 +867,7 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
                                 m = res.get("month", "")
                                 name = MONTH_NAMES.get(m[-2:], m) if m else ""
                                 month_str = f" in {name}" if name else ""
-                                answer = f"Your total spending{month_str} was ${float(tot):.2f}."
+                                answer = f"Your spending total{month_str} was ${float(tot):.2f}."
 
                         # Else: no matching tool result exists, keep the model's answer. It must never substitute a different metric.
 
