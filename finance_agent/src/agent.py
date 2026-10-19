@@ -430,6 +430,64 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
                 clean_answer = re.sub(r'\d{4}-\d{2}-\d{2}T[\d:.]+', '', clean_answer)
                 answer = clean_answer
 
+                # adv_live_05 enforcement: any question asking for a spending total, or a combination of totals,
+                # must call a read tool before answering. If the model answers without a tool call, replace the answer
+                # with the tool result, or with a plain statement that the figure needs the data to be checked.
+                is_spending_total_query = bool(
+                    re.search(r"\b(combined\s+total|combined\s+spending|total\s+is|tell\s+me\s+the\s+total)\b", q_lower)
+                    or ("total" in q_lower and any(c in q_lower for c in ["spending", "spent", "dining", "groceries"]))
+                    or ("spending" in q_lower and "total" in q_lower)
+                )
+                if not all_tool_calls and is_spending_total_query:
+                    MONTH_MAP = {
+                        "january": "01", "february": "02", "march": "03", "april": "04",
+                        "may": "05", "june": "06", "july": "07", "august": "08",
+                        "september": "09", "october": "10", "november": "11", "december": "12"
+                    }
+                    target_month = None
+                    m_iso = re.search(r"\b(20\d{2}-(?:0[1-9]|1[0-2]))\b", question)
+                    if m_iso:
+                        target_month = m_iso.group(1)
+                    else:
+                        m_named = re.search(r"(?i)\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})\b", question)
+                        if m_named:
+                            mon_name = m_named.group(1).lower()
+                            yr = m_named.group(2)
+                            target_month = f"{yr}-{MONTH_MAP[mon_name]}"
+
+                    if target_month:
+                        raw_res = tools_mod.spending_by_category(month=target_month)
+                        try:
+                            res_data = json.loads(raw_res) if isinstance(raw_res, str) else raw_res
+                        except Exception:
+                            res_data = {}
+                        if isinstance(res_data, dict) and "error" not in res_data:
+                            all_tool_calls.append({
+                                "name": "spending_by_category",
+                                "arguments": {"month": target_month},
+                                "result": res_data,
+                            })
+                            print(f"[Tool Call] spending_by_category({{'month': '{target_month}'}})")
+                            by_cat = res_data.get("spending_by_category", {})
+                            mentioned_cats = [c for c in ["Dining", "Groceries", "Transport", "Health", "Utilities", "Shopping", "Entertainment"] if c.lower() in q_lower]
+                            if len(mentioned_cats) >= 2:
+                                cat_parts = []
+                                comb_total = 0.0
+                                for c in mentioned_cats:
+                                    c_amt = float(by_cat.get(c, 0.0))
+                                    cat_parts.append(f"{c} was ${c_amt:.2f}")
+                                    comb_total += c_amt
+                                month_label = format_month_label(target_month)
+                                answer = f"In {month_label}, {', and '.join(cat_parts)}. The figure needs the data to be checked against your transaction records."
+                            else:
+                                tot = res_data.get("total_spent", 0.0)
+                                month_label = format_month_label(target_month)
+                                answer = f"In {month_label}, your total spending was ${float(tot):.2f}. The figure needs the data to be checked against your transaction records."
+                        else:
+                            answer = "The figure needs the data to be checked against your transaction records."
+                    else:
+                        answer = "The figure needs the data to be checked against your transaction records."
+
                 # Check for deterministic replies:
                 # 1. Any tool returned needs_clarification
                 clarification_tc = None
@@ -658,72 +716,153 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
 
                     has_ungrounded = any(not any(abs(d - tn) <= 0.01 for tn in tool_numbers) for d in found_dollars)
                     if has_ungrounded and found_dollars:
-                        # Replace answer with the tool's total and a plain sentence
                         q_lower_check = question.lower()
-                        matched_cat = None
-                        for cat_cand in ["Dining", "Groceries", "Transport", "Health", "Utilities", "Shopping", "Entertainment"]:
-                            if cat_cand.lower() in q_lower_check:
-                                matched_cat = cat_cand
-                                break
-
-                        months_seen = []
-                        for tc in spending_tcs:
-                            m_arg = tc.get("arguments", {}).get("month")
-                            if m_arg and m_arg not in months_seen:
-                                months_seen.append(m_arg)
-
                         MONTH_NAMES = {
                             "01": "January", "02": "February", "03": "March", "04": "April",
                             "05": "May", "06": "June", "07": "July", "08": "August",
                             "09": "September", "10": "October", "11": "November", "12": "December"
                         }
 
-                        if len(months_seen) >= 2 and matched_cat:
-                            m_totals = {}
-                            for m in months_seen:
-                                for tc in spending_tcs:
-                                    if tc.get("arguments", {}).get("month") == m:
+                        # Metrics detection
+                        is_income_q = bool(re.search(r"\b(income|earned|salary|earnings)\b", q_lower_check))
+                        is_savings_rate_q = bool(re.search(r"\bsavings?\s+rate\b", q_lower_check))
+                        is_net_savings_q = bool(re.search(r"\b(net\s+savings?|savings?|how\s+much\s+did\s+i\s+save)\b", q_lower_check) and not is_savings_rate_q)
+                        is_over_budget_q = bool(re.search(r"\bover\s+budget\b|\bover-budget\b|\bexceeded\s+budget\b|\bbudget\s+status\b|\bunder\s+budget\b", q_lower_check))
+
+                        matched_cats = [c for c in ["Dining", "Groceries", "Transport", "Health", "Utilities", "Shopping", "Entertainment"] if c.lower() in q_lower_check]
+                        matched_cat = matched_cats[0] if matched_cats else None
+
+                        is_total_spending_q = bool(
+                            re.search(r"\b(total\s+spending|spending\s+total|total\s+expenses|spend\s+in\s+total)\b", q_lower_check)
+                            or (re.search(r"\b(how\s+much\s+did\s+i\s+spend|spending)\b", q_lower_check) and not matched_cat and not is_income_q and not is_net_savings_q and not is_savings_rate_q and not is_over_budget_q)
+                        )
+
+                        # Match only the tool result corresponding to the question's metric
+                        if is_income_q:
+                            inc_tc = next((tc for tc in all_tool_calls if isinstance(tc.get("result"), dict) and "total_income" in tc.get("result")), None)
+                            if inc_tc:
+                                res = inc_tc.get("result", {})
+                                inc_val = float(res.get("total_income", 0.0))
+                                m = res.get("month", "")
+                                name = MONTH_NAMES.get(m[-2:], m) if m else ""
+                                month_str = f" in {name}" if name else ""
+                                answer = f"Your total income{month_str} was ${inc_val:.2f}."
+                            # If no matching tool result exists, keep the model's answer
+
+                        elif is_net_savings_q:
+                            ns_tc = next((tc for tc in all_tool_calls if isinstance(tc.get("result"), dict) and "net_savings" in tc.get("result")), None)
+                            if ns_tc:
+                                res = ns_tc.get("result", {})
+                                ns_val = float(res.get("net_savings", 0.0))
+                                m = res.get("month", "")
+                                name = MONTH_NAMES.get(m[-2:], m) if m else ""
+                                month_str = f" in {name}" if name else ""
+                                answer = f"Your net savings{month_str} were ${ns_val:.2f}."
+
+                        elif is_savings_rate_q:
+                            sr_tc = next((tc for tc in all_tool_calls if isinstance(tc.get("result"), dict) and ("savings_rate" in tc.get("result") or "savings_rate_pct" in tc.get("result"))), None)
+                            if sr_tc:
+                                res = sr_tc.get("result", {})
+                                sr_val = float(res.get("savings_rate") or res.get("savings_rate_pct") or 0.0)
+                                m = res.get("month", "")
+                                name = MONTH_NAMES.get(m[-2:], m) if m else ""
+                                month_str = f" in {name}" if name else ""
+                                answer = f"Your savings rate{month_str} was {sr_val:.1f}%."
+
+                        elif is_over_budget_q:
+                            bs_tc = next((tc for tc in all_tool_calls if isinstance(tc.get("result"), dict) and ("over_budget_categories" in tc.get("result") or "over_budget" in tc.get("result") or "categories" in tc.get("result"))), None)
+                            if bs_tc:
+                                res = bs_tc.get("result", {})
+                                over_cats = res.get("over_budget_categories")
+                                if over_cats is None:
+                                    over_cats = res.get("over_budget", [])
+                                m = res.get("month", "")
+                                name = MONTH_NAMES.get(m[-2:], m) if m else ""
+                                month_prefix = f"In {name}, " if name else ""
+                                if over_cats:
+                                    cats_str = ", ".join(over_cats)
+                                    answer = f"{month_prefix}you were over budget in {cats_str}."
+                                else:
+                                    answer = f"{month_prefix}you were not over budget in any category."
+
+                        elif matched_cat:
+                            months_seen = []
+                            for tc in spending_tcs:
+                                m_arg = tc.get("arguments", {}).get("month")
+                                if m_arg and m_arg not in months_seen:
+                                    months_seen.append(m_arg)
+
+                            if len(matched_cats) >= 2:
+                                m = months_seen[0] if months_seen else ""
+                                name = MONTH_NAMES.get(m[-2:], m) if m else ""
+                                month_prefix = f"In {name}, " if name else ""
+                                cat_parts = []
+                                for c in matched_cats:
+                                    amt = 0.0
+                                    for tc in spending_tcs:
                                         res = tc.get("result", {})
                                         if isinstance(res, dict):
                                             s_cat = res.get("spending_by_category", {})
-                                            if matched_cat in s_cat:
-                                                m_totals[m] = float(s_cat[matched_cat])
+                                            if c in s_cat:
+                                                amt = float(s_cat[c])
+                                                break
                                             elif "transactions" in res:
                                                 txs = res["transactions"]
-                                                m_totals[m] = sum(float(t.get("amount", 0)) for t in txs if str(t.get("category", "")).lower() == matched_cat.lower() and t.get("type") == "expense")
-                            if len(m_totals) >= 2:
-                                sorted_m = sorted(m_totals.keys())
-                                m1, m2 = sorted_m[0], sorted_m[1]
-                                t1, t2 = m_totals[m1], m_totals[m2]
-                                name1 = MONTH_NAMES.get(m1[-2:], m1)
-                                name2 = MONTH_NAMES.get(m2[-2:], m2)
-                                if t2 > t1:
-                                    answer = f"Yes, your {matched_cat.lower()} spending jumped from ${t1:.2f} in {name1} to ${t2:.2f} in {name2}."
-                                else:
-                                    answer = f"Your {matched_cat.lower()} spending was ${t1:.2f} in {name1} and ${t2:.2f} in {name2}."
-                        elif matched_cat and len(months_seen) == 1:
-                            m = months_seen[0]
-                            name = MONTH_NAMES.get(m[-2:], m)
-                            amt = 0.0
-                            for tc in spending_tcs:
-                                res = tc.get("result", {})
-                                if isinstance(res, dict):
-                                    s_cat = res.get("spending_by_category", {})
-                                    if matched_cat in s_cat:
-                                        amt = float(s_cat[matched_cat])
-                                        break
-                                    elif "transactions" in res:
-                                        txs = res["transactions"]
-                                        amt = sum(float(t.get("amount", 0)) for t in txs if str(t.get("category", "")).lower() == matched_cat.lower() and t.get("type") == "expense")
-                                        break
-                            answer = f"Your {matched_cat.lower()} spending was ${amt:.2f} in {name}."
-                        else:
-                            tot = 0.0
-                            tc = spending_tcs[0]
-                            res = tc.get("result", {})
-                            if isinstance(res, dict):
+                                                amt = sum(float(t.get("amount", 0)) for t in txs if str(t.get("category", "")).lower() == c.lower() and t.get("type") == "expense")
+                                                break
+                                    cat_parts.append(f"{c} was ${amt:.2f}")
+                                answer = f"{month_prefix}{', and '.join(cat_parts)}. The figure needs the data to be checked against your transaction records."
+                            elif len(months_seen) >= 2:
+                                m_totals = {}
+                                for m in months_seen:
+                                    for tc in spending_tcs:
+                                        if tc.get("arguments", {}).get("month") == m:
+                                            res = tc.get("result", {})
+                                            if isinstance(res, dict):
+                                                s_cat = res.get("spending_by_category", {})
+                                                if matched_cat in s_cat:
+                                                    m_totals[m] = float(s_cat[matched_cat])
+                                                elif "transactions" in res:
+                                                    txs = res["transactions"]
+                                                    m_totals[m] = sum(float(t.get("amount", 0)) for t in txs if str(t.get("category", "")).lower() == matched_cat.lower() and t.get("type") == "expense")
+                                if len(m_totals) >= 2:
+                                    sorted_m = sorted(m_totals.keys())
+                                    m1, m2 = sorted_m[0], sorted_m[1]
+                                    t1, t2 = m_totals[m1], m_totals[m2]
+                                    name1 = MONTH_NAMES.get(m1[-2:], m1)
+                                    name2 = MONTH_NAMES.get(m2[-2:], m2)
+                                    if t2 > t1:
+                                        answer = f"Yes, your {matched_cat.lower()} spending jumped from ${t1:.2f} in {name1} to ${t2:.2f} in {name2}."
+                                    else:
+                                        answer = f"Your {matched_cat.lower()} spending was ${t1:.2f} in {name1} and ${t2:.2f} in {name2}."
+                            elif len(months_seen) == 1:
+                                m = months_seen[0]
+                                name = MONTH_NAMES.get(m[-2:], m)
+                                amt = 0.0
+                                for tc in spending_tcs:
+                                    res = tc.get("result", {})
+                                    if isinstance(res, dict):
+                                        s_cat = res.get("spending_by_category", {})
+                                        if matched_cat in s_cat:
+                                            amt = float(s_cat[matched_cat])
+                                            break
+                                        elif "transactions" in res:
+                                            txs = res["transactions"]
+                                            amt = sum(float(t.get("amount", 0)) for t in txs if str(t.get("category", "")).lower() == matched_cat.lower() and t.get("type") == "expense")
+                                            break
+                                answer = f"Your {matched_cat.lower()} spending was ${amt:.2f} in {name}."
+
+                        elif is_total_spending_q:
+                            tot_tc = next((tc for tc in all_tool_calls if isinstance(tc.get("result"), dict) and ("total_spent" in tc.get("result") or "total_expenses" in tc.get("result"))), None)
+                            if tot_tc:
+                                res = tot_tc.get("result", {})
                                 tot = res.get("total_spent") or res.get("total_expenses") or 0.0
-                            answer = f"Your spending total was ${float(tot):.2f}."
+                                m = res.get("month", "")
+                                name = MONTH_NAMES.get(m[-2:], m) if m else ""
+                                month_str = f" in {name}" if name else ""
+                                answer = f"Your total spending{month_str} was ${float(tot):.2f}."
+
+                        # Else: no matching tool result exists, keep the model's answer. It must never substitute a different metric.
 
                 # Remove any Source line from the answer text - Source goes only into 'How I got this'
                 answer = re.sub(r'(?i)\n*\bSource:\s*.*$', '', answer).strip()
