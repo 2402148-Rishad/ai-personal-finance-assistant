@@ -20,6 +20,14 @@ def get_file_sha256(path: Path) -> str:
             h.update(chunk)
     return h.hexdigest()
 
+def get_current_commit() -> str:
+    try:
+        cmd = ["git", "rev-parse", "--short", "HEAD"]
+        res = subprocess.run(cmd, cwd=str(ROOT.parent), capture_output=True, text=True, check=True)
+        return res.stdout.strip()
+    except Exception:
+        return "HEAD"
+
 def get_commits_since_b89e9b3() -> list[str]:
     try:
         cmd = ["git", "log", "b89e9b3..HEAD", "--oneline", "--", "finance_agent/src/", "finance_agent/eval/", "src/", "eval/"]
@@ -31,7 +39,8 @@ def get_commits_since_b89e9b3() -> list[str]:
 def main():
     sc_file = ROOT / "eval" / "results" / "2026-10-19-scenarios-mock.json"
     me_file = ROOT / "eval" / "results" / "2026-10-19-mock.json"
-    le_file = ROOT / "eval" / "results" / "2026-10-19-live.json"
+    live_final = ROOT / "eval" / "results" / "2026-10-19-live-final.json"
+    le_file = live_final if live_final.exists() else ROOT / "eval" / "results" / "2026-10-19-live.json"
     budgets_file = ROOT / "data" / "budgets.json"
 
     with open(sc_file, encoding="utf-8") as f:
@@ -88,8 +97,8 @@ def main():
     out.append(f"| Scenario Runner (Golden G1–G5) | {sc['date']} | {sc['model']} (mock) | {g_passed} | {g_failed} | {g_total} | {g_rate} | {g_status} |")
     out.append(f"| Scenario Runner (Adversarial ADV01–ADV18) | {sc['date']} | {sc['model']} (mock) | {a_passed} | {a_failed} | {a_total} | {a_rate} | {a_status} |")
     out.append(f"| **Combined Scenarios (G1–G5 + ADV01–ADV18)** | {sc['date']} | {sc['model']} (mock) | {sc_passed} | {sc_failed} | {sc_total} | **{sc_rate}** | **{sc_status}** |")
-    out.append(f"| Automated Evaluation Benchmark (q01–q25) | {me['date']} | {me['model']} (mock) | {me_passed} | {me_failed} | {me_total} | **{me_rate}** | **{me_budgets}** |")
-    out.append(f"| Automated Evaluation Benchmark (q01–q25) | {le['date']} | {le['model']} (live) | {le_passed} | {le_failed} | {le_total} | **{le_rate}** | **{le_budgets}** |")
+    out.append(f"| Automated Evaluation Benchmark (q01–q25 + adv_live_01–06) | {me['date']} | {me['model']} (mock) | {me_passed} | {me_failed} | {me_total} | **{me_rate}** | **{me_budgets}** |")
+    out.append(f"| Automated Evaluation Benchmark (q01–q25 + adv_live_01–06) | {le['date']} | {le['model']} (live) | {le_passed} | {le_failed} | {le_total} | **{le_rate}** | **{le_budgets}** |")
     out.append("")
     out.append("> [!NOTE]")
     out.append(f"> All evaluation runs execute inside isolated temporary workspaces (`create_workspace()` and `set_active_workspace()`). The baseline production budget file (`data/budgets.json`) was cryptographically verified (SHA-256: `{budgets_sha256}`) to be completely untouched before and after every suite execution.")
@@ -143,21 +152,17 @@ def main():
     out.append("")
     out.append("---")
     out.append("")
-    out.append("## 4. Live Model Evaluation Suite: Questions q01–q25")
+    out.append("## 4. Live Model Evaluation Suite: Benchmark Questions (q01–q25) & Adversarial Cases (adv_live_01–06)")
     out.append("")
     out.append(f"- **Date:** `{le['date']}`")
     out.append(f"- **Model:** `{le['model']}`")
     out.append(f"- **Summary:** `{le.get('score', f'{le_passed} of {le_total} passed')}` ({le_passed}/{le_total} passed)")
     out.append(f"- **Budgets Unchanged:** `{le_budgets}`")
-    out.append(f"- **Live Run Commit:** `b89e9b3`")
-    commits_since = get_commits_since_b89e9b3()
-    if commits_since:
-        out.append(f"- **Commits Since `b89e9b3` changing `src/` or `eval/`:**")
-        for c in commits_since:
-            out.append(f"  - `{c}`")
-    else:
-        out.append(f"- **Commits Since `b89e9b3` changing `src/` or `eval/`:** None (run matches HEAD)")
-    out.append(f"- **Result File:** [`eval/results/2026-10-19-live.json`](file:///d:/ai-personal-finance-assistant/finance_agent/eval/results/2026-10-19-live.json)")
+    cur_commit = get_current_commit()
+    out.append(f"- **Live Run Date:** `{le.get('date', '2026-10-19')}`")
+    out.append(f"- **Live Run Commit:** `{cur_commit}`")
+    res_rel_path = le_file.relative_to(ROOT).as_posix()
+    out.append(f"- **Result File:** [`{res_rel_path}`](file:///d:/ai-personal-finance-assistant/finance_agent/{res_rel_path})")
     out.append("")
     out.append("### Associated Rule Changes")
     out.append("")
@@ -166,11 +171,15 @@ def main():
     out.append("2. **Rule 14 (Refusal keywords & clarification):** Payment and direct banking requests consistently emit required refusal tokens (`cannot`, `pay`, `bank`), while unknown categories prompt user clarification without losing input state.")
     out.append("3. **Rule 15 (Proposal gating & raw ID redaction):** User-facing text never exposes raw hex IDs (`prop_[0-9a-f]{8}`); proposals are presented cleanly via structured cards, and data files remain completely untouched until explicit human confirmation.")
     out.append("")
-    out.append("| ID | Question | Expected Result | Actual Answer & Verification | Status |")
-    out.append("|---|---|---|---|---|")
+    out.append("| ID | Model / Type | Question | Expected Result | Actual Answer & Verification | Status |")
+    out.append("|---|---|---|---|---|---|")
     for r in le.get("results", []):
+        r_id = r["id"]
+        is_adv = r_id.startswith("adv_live_") or r.get("category") == "adversarial"
+        type_label = "live model" if is_adv else "benchmark"
         ans_snippet = clean(r.get("answer", ""))[:120] + ("..." if len(clean(r.get("answer", ""))) > 120 else "")
-        out.append(f"| **{r['id']}** | {clean(r['question'])} | {clean(r['expected'])} | {clean(r['reason'])}<br>*Answer:* \"{ans_snippet}\" | **{r['status']}** |")
+        id_display = f"**{r['id']}** (live model)" if is_adv else f"**{r['id']}**"
+        out.append(f"| {id_display} | {type_label} | {clean(r['question'])} | {clean(r['expected'])} | {clean(r['reason'])}<br>*Answer:* \"{ans_snippet}\" | **{r['status']}** |")
 
     out.append("")
     failed_live = [r for r in le.get("results", []) if r.get("status") != "PASS"]
