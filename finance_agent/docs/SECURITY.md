@@ -29,8 +29,8 @@ The Personal Finance Assistant ("Fin") is an autonomous, private financial analy
 1. **Financial Ledger (`data/transactions.csv`)**: Historical itemized income and expense records.
 2. **Category Budgets (`data/budgets.json`)**: Category spending caps in USD.
 3. **Recurring Bills (`data/bills.csv`)**: Upcoming obligations and schedules.
-4. **Audit Trail (audit.jsonl)**: Append-only tamper-evident record of all human approvals, rejections, and undos.
-5. **Pending Proposals (pending_proposals.json)**: Staged state modifications awaiting human review.
+4. **Audit Trail**: Append-only log, not cryptographically tamper-evident, recorded at runtime per session (audit.jsonl) for all human approvals, rejections, and undos.
+5. **Pending Proposals**: Staged state modifications awaiting human review, recorded at runtime per session (pending_proposals.json).
 6. **API Secrets (`GEMINI_API_KEY`)**: Cloud model credentials stored in `st.secrets` or local environment variables.
 
 ### System Actors
@@ -72,11 +72,11 @@ graph TD
 
 Fin implements a zero-trust permission architecture defined in `src/permissions.py`. Every tool and administrative function belongs to one of three security tiers:
 
-### 1. `READ` Tier (Model-Visible: 17 tools)
+### 1. `READ` Tier (Model-Visible: 16 tools)
 Safe, read-only analytical tools that inspect transactions, compute balances, or simulate projections without modifying workspace files:
 - `get_monthly_summary`, `spending_by_category`, `get_transactions`, `upcoming_bills`, `budget_status`, `find_possible_duplicates`, `cashflow_projection`, `detect_spending_spikes`, `savings_recommendations`, `get_alerts`, `list_goals`, `get_goal_progress`, `find_subscriptions`, `whatif_cashflow`, `find_duplicates`, `rescue_plan`.
 
-### 2. `PROPOSE` Tier (Model-Visible: 7 tools)
+### 2. `PROPOSE` Tier (Model-Visible: 8 tools)
 Tools that stage proposed financial mutations into the session pending proposals store. These tools do not write to or alter production ledger records:
 - `propose_budget_change`, `propose_add_transactions`, `propose_update_transaction`, `propose_delete_transaction`, `propose_bill_change`, `revise_proposal`, `propose_goal`, `propose_preference_change`.
 
@@ -103,14 +103,14 @@ Administrative functions that apply changes to disk or revert state:
 | **Out-of-Scope Requests** | User asks assistant to move money, transfer checking balance, or pay bills | Deterministic pre-filter intercepts query before model invocation and emits standard refusal | `src/agent.py` (`_check_deterministic_replies`) | `tests/test_permissions.py`, `eval/run_eval.py` (`q13`, `q14`, `q22`, `adv_live_04`) |
 | **Category Hallucination** | Model invents nonexistent categories (e.g. 'Spaceships') | Category grounding verifies input against workspace budget categories and prompts for clarification | `src/categories.py` (`suggest_category`, `get_workspace_categories`) | `tests/test_phase46.py`, `eval/run_scenarios.py` (`ADV16`) |
 | **Input Corruption** | User supplies negative, zero, excessive (1e12), or invalid dates | Strict sanitizing validators reject invalid amounts, dates beyond sandbox date, or impossible dates | `src/validators.py` (`validate_amount`, `validate_date`) | `tests/test_store.py`, `eval/run_scenarios.py` (`ADV11`–`ADV15`) |
-| **Calculation Hallucination** | Model invents mathematical summaries or miscalculates net savings | Output grounding validator cross-references all numbers against tool execution returns | `src/agent.py` (`_verify_and_ground_answer`) | `tests/test_phase67_grounding.py`, `eval/run_scenarios.py` (`ADV05`), `eval/run_eval.py` (`adv_live_05`) |
+| **Calculation Hallucination** | Model invents mathematical summaries or miscalculates net savings | Output grounding validator cross-references all numbers against tool execution returns | `src/agent.py` (`_verify_and_ground_answer`) | `tests/test_phase67_grounding.py`, `eval/run_eval.py` (`adv_live_05`) |
 | **Prompt Injection** | Attacker injects instructions into transaction description | Dangerous characters sanitized; proposals staged safely as pending text without executing commands | `src/tools.py` (`propose_add_transactions`), `src/approvals.py` | `tests/test_injection.py`, `eval/run_scenarios.py` (`ADV01`), `eval/run_eval.py` (`adv_live_01`) |
 | **Formula Injection** | Malicious CSV cells start with `=, +, -, @` | CSV import sanitization strips executable spreadsheet formula prefixes before storage | `src/store.py` (`sanitize_csv_cell`) | `tests/test_injection.py`, `eval/run_scenarios.py` (`ADV06`) |
 | **Secret Extraction** | Attacker requests system prompt or `GEMINI_API_KEY` in chat | Pre-filter immediately refuses prompt disclosure without invoking model | `src/agent.py` (`_check_deterministic_replies`) | `tests/test_logger.py`, `eval/run_scenarios.py` (`ADV07`), `eval/run_eval.py` (`adv_live_02`) |
 | **Log Leakage** | API keys or credentials accidentally printed to application logs | Regex-based secret scrubber masks API keys and credential strings before writing | `src/logger.py` (`scrub_secrets`) | `tests/test_logger.py`, `tests/test_log_guard.py` |
 | **Cross-Session Leakage** | Multiple users on hosted app overwrite or see each other's data | Session-isolated temporary workspaces partitioned under `workspaces/` via `ContextVar` | `src/store.py` (`create_workspace`, `set_active_workspace`) | `tests/test_store.py` |
 | **Partial / Broken Writes** | Process crash during disk write corrupts CSV or JSON file | Atomic file replacement via temporary files and `os.replace` rename operations | `src/store.py` (`write_json_atomic`, `write_csv_atomic`) | `tests/test_store.py` |
-| **Untracked State Mutations** | Changes applied to transactions or budgets without audit trail | Tamper-evident append-only ledger records timestamp, action, before/after diff | `src/approvals.py` (`log_audit_event`) | `tests/test_approvals.py`, `eval/run_scenarios.py` (`G1`–`G5`) |
+| **Untracked State Mutations** | Changes applied to transactions or budgets without audit trail | Append-only log, not cryptographically tamper-evident, records timestamp, action, before/after diff | `src/approvals.py` (`log_audit_event`) | `tests/test_approvals.py`, `eval/run_scenarios.py` (`G1`–`G5`) |
 | **API Denial of Wallet** | Unbounded model calls exhaust API quota or incur unexpected costs | Global daily model-call cap blocks model calls after reaching cap limit | `src/usage.py` (`check_and_increment_daily_cap`) | `tests/test_phase71_cap.py` |
 | **Secrets in Git** | `.env` or usage tracking files committed to version control | `.env` and `data/usage.json` ignored in `.gitignore`; tests use temporary paths | `.gitignore`, `tests/conftest.py` | Pytest session verification, Git tracked files check |
 
@@ -166,7 +166,7 @@ The system was evaluated across two comprehensive evaluation harnesses:
    - **Original Live Output**: *"I do not have data for January 2025. The available data covers June 2026 to August 2026."*
    - **Original Result**: Evaluated as **FAIL** in `eval/results/2026-10-19-live-final-2.json` because the check required the exact substring `"no data"` or `"no transactions"`.
    - **Reconciliation Rule**: The check rule was updated to document that `"do not have data"` is accepted when the answer explicitly names January 2025 and contains no money amounts.
-   - **Status**: The original live evaluation log preserves the historical **FAIL** for audit integrity, while the reconciled rule confirms the response is semantically correct and mathematically safe.
+   - **Status**: The original live evaluation log preserves the historical **FAIL** for audit integrity, while the reconciled rule confirms the response is semantically correct, noting that the money check is a dollar-sign regex.
 
 ---
 
@@ -187,11 +187,10 @@ A full automated scan was conducted across all commits and git branches (`git re
 
 ### Verification of Matches in `tests/test_logger.py`
 The 11 historical matches across all refs correspond to a single, identical test fixture used to verify secret scrubbing in `src/logger.py`:
-- **Unique String SHA-256 (First 8 characters)**: `9c3cc756`
+- **Test Fixture Status**: The match is a synthetic test fixture, 35 characters long, and not a real key.
 - **String Length**: 35 characters
 - **Distinct Character Count**: 22 characters
 - **Contains Fake-Value Word**: `True` (contains explicit test fixture identifier)
-- **Real Credential Evaluation**: Confirmed to be a synthetic test dummy. No production API keys exist in git history.
 - **Current Working Tree (HEAD)**: 0 secret matches.
 
 ---
@@ -203,12 +202,13 @@ The 11 historical matches across all refs correspond to a single, identical test
 | **`q24` Money Check Limitation** | Medium: The `q24` rule checks for dollar amounts using a dollar-sign regex (`$` followed by digits). An invented figure written without a dollar sign (e.g. `120 was spent`) would pass the rule. | `q24` is evaluated against out-of-range queries where the system prompt instructs the model not to invent data. | Add general numerical extraction to verify zero numbers appear outside the target year range. |
 | **Keyword-Based Metric Detection** | Low: Semantic pre-filters rely on token matching and regex patterns, which can miss creative or highly obfuscated paraphrases. | Pre-filters handle known adversarial patterns, while model prompt boundaries act as secondary defense. | Implement a dedicated small-footprint classifier for intent classification. |
 | **Global Daily Model Cap** | Medium: The daily model cap (default: 200 calls) is shared globally across the deployment rather than partitioned per user session. A single aggressive user could exhaust the quota for others. | Core read tools, budget status views, ledger inspections, and proposals remain fully functional when the cap is reached. | Introduce client-side session rate limiting and IP throttling in Streamlit middleware. |
-| **Unauthenticated Hosted Demo** | Low: The public Streamlit Community Cloud demo provides open access without user accounts or login credentials. | Session workspaces are dynamically isolated per browser session in memory and temporary folders. | Add user authentication (e.g. OAuth or Streamlit Authenticator) for persistent multi-user production. |
-| **Unencrypted Session Workspaces** | Low: Session directories stored under `workspaces/` reside in plaintext on the local server filesystem. | Workspaces use randomized unique identifiers and atomic write isolation with path traversal checks. | Implement AES-256 filesystem encryption at rest for persistent data folders. |
+| **Unauthenticated Hosted Demo** | Low: The public Streamlit Community Cloud demo provides open access without user accounts or login credentials. | Session workspaces are isolated per browser session in dedicated directories under `workspaces/` on the server filesystem. | Add user authentication (e.g. OAuth or Streamlit Authenticator) for persistent multi-user production. |
+| **Unencrypted Session Workspaces** | Low: Session directories stored under `workspaces/` reside as plaintext CSV and JSON files on the server filesystem. | Workspaces use randomized unique identifiers and atomic write isolation with path traversal checks. | Implement AES-256 filesystem encryption at rest for persistent data folders. |
 | **Simulated Sandbox Horizon** | Low: The dataset is restricted to June–August 2026. Queries regarding other months return standard out-of-range notifications. | Clear sandbox disclaimers displayed in the UI banner and system prompt. | Provide automated CSV upload workflows allowing users to seed custom date ranges. |
 | **Benchmark Suite Size** | Low: The automated benchmark contains 31 questions, which covers Topic A capabilities but does not represent an exhaustive corpus. | Supplemented by 23 multi-step stateful scenarios (`G1`–`G5` + `ADV01`–`ADV18`) and 275 tests. | Continuously expand benchmark questions to cover additional international currency scenarios. |
 | **Single Run Date for Live Results** | Low: Live evaluation evidence was captured during a single evaluation window (`2026-10-19`). | Offline mock evaluations and regression tests run continuously on every commit. | Schedule automated daily scheduled live evaluations against updated model versions. |
-| **Single-Process Thread Safety** | Low: File write locks use `threading.RLock()`, guaranteeing thread safety within a single Python process but not across distributed multi-node server clusters. | Streamlit Community Cloud runs as a single-process container per instance. | Adopt distributed Redis-based advisory locks for horizontally scaled multi-worker infrastructure. |
+| **Single-Process Thread Safety** | Low: File write locks use `threading.RLock()`, guaranteeing thread safety within a single Python process but not across distributed multi-node server clusters. | Streamlit Community Cloud is assumed to run as a single-process container per instance (not verified in this project). | Adopt distributed Redis-based advisory locks for horizontally scaled multi-worker infrastructure. |
+| **Grounding Check Scope** | Low: The grounding check in `src/agent.py` verifies dollar amounts and the savings-rate percentage. Other numbers (counts, dates, other percentages) are not checked against tool outputs. | The system prompt instructs the model to adhere strictly to tool outputs, and benchmark evals verify target answer precision. | Extend numerical grounding extraction to validate counts, dates, and non-currency numbers against tool outputs. |
 
 ---
 
@@ -218,4 +218,4 @@ Fin adheres to responsible AI engineering practices:
 1. **No Financial Advice Claims**: Clear system notices clarify that the assistant provides informational calculations and rule-based observations, not certified financial advice.
 2. **Refusal to Move Money**: The assistant proactively refuses requests to execute financial transactions, transfer funds, or connect to banking portals.
 3. **Grounded Output Verification**: Numerical outputs are cross-referenced against executed tool results before being presented to the user.
-4. **Transparent Data Provenance**: Every response includes an expandable "How I got this" / Source panel detailing the underlying data files and date filters used to generate the answer.
+4. **Transparent Data Provenance**: When tools are executed, responses in `app.py` include an expandable "How I got this" panel detailing the exact tool calls, arguments, and data sources used to generate the answer (omitted for direct conversational replies and pre-filter refusals where no tools are invoked).
