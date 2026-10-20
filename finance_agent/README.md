@@ -20,7 +20,7 @@ The assistant analyzes transaction history, tracks category budgets, forecasts f
 
 ---
 
-## Quick Start
+## Local Setup
 
 ### 1. Requirements & Setup
 - Python 3.10 or newer.
@@ -97,27 +97,29 @@ finance_agent/
 
 ---
 
-## Running Tests & Evaluations
+## Running Tests & Running Evals
 
 All tests and evaluations run offline by default without requiring an active Gemini API key:
 
-### Unit & Security Test Suite (Pytest)
+### Running Tests (pytest -q)
+```bash
+pytest -q
+```
+*Or using Python module invocation:*
 ```bash
 python -m pytest -q
 ```
 Executes all **275 tests** across **43 test files**, including validator boundary tests, permission enforcement checks, prompt injection defenses, and atomic store isolation.
 
-### Benchmark Evaluation Runner
+### Running Evals
 ```bash
+# Benchmark evaluation runner (31 cases)
 python eval/run_eval.py
-```
-Executes the **31 cases** benchmark suite in offline mock mode (scoring 31 of 31 passed).
 
-### Multi-Step Scenario Harness
-```bash
+# Multi-step scenario harness (23 cases)
 python eval/run_scenarios.py
 ```
-Executes the **23 cases** stateful scenario suite, validating multi-step golden flows (`G1`–`G5`) and adversarial security scenarios (`ADV01`–`ADV18`).
+Executes the **31 cases** benchmark suite in offline mock mode (scoring 31 of 31 passed) and the **23 cases** stateful scenario suite, validating multi-step golden flows (`G1`–`G5`) and adversarial security scenarios (`ADV01`–`ADV18`).
 
 ### Documentation Consistency Verification
 ```bash
@@ -139,10 +141,11 @@ For deeper technical and operational insights, explore the four core documentati
 
 ---
 
-## Deployment & Security Notes
+## Deployment on Streamlit Community Cloud
 
-- **Cloud Hosting**: The live demonstration is hosted on Streamlit Community Cloud at https://ai-personal-finance-assistant-acceyufjoyulunmsa5rblo.streamlit.app/.
-- **Secrets Management**: Deployed credentials are managed through Streamlit Secrets (`st.secrets["GEMINI_API_KEY"]`), never exposed in client bundles or logged.
+- **Live Deployed Application**: https://ai-personal-finance-assistant-acceyufjoyulunmsa5rblo.streamlit.app/
+- **Main Application File**: Configured with main file `finance_agent/app.py` for deployment on Streamlit Community Cloud.
+- **Secrets Management**: `GEMINI_API_KEY` set in app secrets (via the Streamlit Community Cloud console), never in the repo.
 - **Session Isolation**: Each visiting user operates within an isolated temporary workspace created under `workspaces/` via Python `ContextVar`, preventing cross-session data leakage.
 - **Zero Real Bank Connections**: The assistant operates strictly over sandbox data for the simulated horizon (June 1, 2026 to August 31, 2026). It cannot access external banking APIs or transfer real funds.
 - **Informational Scope**: Outputs are educational financial summaries and do not constitute certified financial or investment advice.

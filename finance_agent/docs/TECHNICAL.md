@@ -240,7 +240,7 @@ Staged human-in-the-loop proposals awaiting confirmation:
 - `status` (string): `pending_confirmation`, `applied`, `rejected`, or `expired`.
 
 ### 8. Audit Trail (audit.jsonl)
-Append-only tamper-evident audit ledger recording every state mutation in session storage:
+Append-only audit ledger, not cryptographically tamper-evident, recording every state mutation in session storage:
 Each line records `timestamp`, `action` (`approve`, `reject`, `undo`), `proposal_id`, `user` (`human`), `details` (exact before and after diff), and `status`.
 
 ### 9. Per-Session Workspace Isolation (`src/store.py`)
@@ -377,7 +377,7 @@ User Request -> Propose Tool -> pending_proposals.json -> Human Reviews UI Card 
 The Streamlit interface (`app.py`) is structured for mobile usability and intuitive workflow navigation:
 
 - **4-Tab Navigation**:
-  1. **Chat**: Conversational interface with quick-action prompt chips, streaming responses, and source citation expanders.
+  1. **Overview**: Financial summary metrics, simulated sandbox balance, cashflow trends, and category spending distributions.
   2. **Ledger**: Itemized transaction browser with category filters, search, and CSV import modal.
   3. **Plan**: Budget status gauges, 30 days cashflow charts, recurring bills schedule, and goal progress cards.
   4. **Inbox**: Centralized approval queue displaying before/after diff cards for all pending proposals, with expiration countdowns and one-click `Approve` / `Reject` buttons.
