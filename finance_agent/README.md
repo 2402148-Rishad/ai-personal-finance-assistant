@@ -1,88 +1,148 @@
 # Personal Finance Assistant
 
-An AI finance agent for FinTechathon 2026, International Track, Topic A (Personal Finance Assistant). Ask it about your spending, get a cashflow projection, catch spending spikes, and get savings suggestions. It can propose budget changes, but it never applies one without you.
+An intelligent, safety-first AI financial assistant built for FinTechathon 2026 (International Track, Topic A: Personal Finance Assistant).
+The assistant analyzes transaction history, tracks category budgets, forecasts forward cashflow, flags spending spikes, discovers recurring subscriptions, and stages financial changes with strict human-in-the-loop approvals.
 
-## Status
+🌐 **Live Deployed Application**: https://ai-personal-finance-assistant-acceyufjoyulunmsa5rblo.streamlit.app/
 
-- **Built:** monthly summaries, category spending, transactions, budget status, bills, duplicate detection, cashflow projection, spike detection, savings recommendations, conversation memory, budget changes with terminal approval, logging, and an 18-case evaluation.
-- **In progress:** prompt-injection defenses, bookkeeping with approval, the web interface, technical documentation, and the security self-assessment.
+---
 
-## Run it
+## Key Features
 
-Requirements: Python 3.10 or newer, and a Gemini API key from Google AI Studio.
+- **Grounded Spending Analytics**: Instant calculation of monthly income, expenses, net savings, and category breakdowns. Every cited dollar figure is verified against deterministic calculations.
+- **Spending Spike Detection**: Flags anomalous month-over-month increases (>50 percent and >$50 jump) to catch budget overruns before they escalate.
+- **30-Day Cashflow Forecasting**: Simulates day-by-day account balances over a forward 30 days horizon, taking scheduled recurring bills into account.
+- **Human-in-the-Loop Mutations**: The model is restricted to `READ` and `PROPOSE` tools (from a suite of 24 tools). Changes to budgets, transactions, or bills are staged as unapplied proposals that require deliberate human confirmation.
+- **Two-Tier Approval Gate**: Low-risk proposals can be approved with `"yes"` or a 1-click button. Destructive actions (deletions and cancellations) require the exact token `"CONFIRM"`.
+- **Reversibility & Audit Trail**: Every approved change logs before-and-after snapshots in the audit log, enabling 1-click rollback via the **Undo** engine. Undo-of-undo is blocked.
+- **Deterministic Security Boundary**: Hardened pre-filters refuse out-of-scope requests (moving money, bank transfers, professional financial advice) before invoking AI models.
+- **Daily Quota Protection**: Enforces a global daily model-call cap (default: 200 calls) to prevent API exhaustion and runaway costs.
 
+---
+
+## Quick Start
+
+### 1. Requirements & Setup
+- Python 3.10 or newer.
+- Google Gemini API key from Google AI Studio.
+
+Clone the repository and set up a virtual environment:
 ```bash
 python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
+source .venv/bin/activate          # On Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Create a `.env` file in the project root:
-
-```
-GEMINI_API_KEY=your-key-here
-```
-
-Start the chat:
-
+### 2. Configure Credentials
+Create a `.env` file in `finance_agent/` (or repository root):
 ```bash
-python main.py
+GEMINI_API_KEY=your_gemini_api_key_here
 ```
+*(Note: `.env` is ignored by version control and is never committed.)*
 
-Commands inside the chat:
+### 3. Launch the Application
 
-- `/pending`: list budget changes waiting for approval
-- `/apply <proposal_id>`: review a change and type exactly `yes` to apply it
-- `/reset`: clear the conversation memory
-- `exit`: quit
-
-Try: "How much did I spend on groceries in July 2026?", then "What about August?". Or: "Set my dining budget to 50.", then `/pending`.
-
-### Web Interface (Streamlit)
-
-Streamlit main file: `finance_agent/app.py`
-
+#### Streamlit Web Interface (Recommended)
+From the `finance_agent` directory:
 ```bash
-cd finance_agent
 streamlit run app.py
 ```
-Or from repo root:
+Or from the repository root:
 ```bash
 streamlit run finance_agent/app.py
 ```
 
-## Test and evaluate
-
+#### Terminal Interactive CLI
 ```bash
-cd finance_agent
-python -m pytest -v            # unit tests
-python eval/run_scenarios.py   # scenario evaluation suite
-python eval/run_eval.py        # automated evaluation runner
+python main.py
 ```
 
-The evaluation can show retries when Gemini is under load. The simulated date is 2026-08-31. Override it with `FINANCE_AS_OF_DATE=YYYY-MM-DD`.
+---
 
-## Project layout
+## Project Architecture & Layout
 
-The single project directory is `finance_agent/`:
-- `finance_agent/app.py`: Streamlit main file for the web interface.
-- `finance_agent/src/`: tools, permissions, approvals, agent loop, prompts, and logger.
-- `finance_agent/data/`: simulated transactions, bills, budgets, and account. This is sandbox data, not real financial information.
-- `finance_agent/eval/`: evaluation scenarios, benchmark runner, and questions (`run_scenarios.py`, `run_eval.py`, `generate_evidence_doc.py`).
-- `finance_agent/tests/`: unit tests and offline adversarial tests.
-- `finance_agent/docs/evidence/`: execution evidence and its index.
+```text
+finance_agent/
+├── app.py                      # Main Streamlit web application entrypoint
+├── main.py                     # Interactive terminal chat entrypoint
+├── src/                        # Core application package
+│   ├── agent.py                # Multi-turn tool execution loop & grounding checks
+│   ├── tools.py                # 24 model-visible analytical & proposal tools
+│   ├── permissions.py          # Three-tier permission framework (READ/PROPOSE/APPLY)
+│   ├── approvals.py            # Proposal lifecycle, two-tier gates, undo engine
+│   ├── store.py                # Session workspace isolation & atomic file I/O
+│   ├── validators.py           # Strict schema, date, and amount sanitization
+│   ├── categories.py           # Category grounding & fuzzy suggestion engine
+│   ├── usage.py                # Daily model-call quota enforcement
+│   ├── logger.py               # Audit logger & regex secret scrubber
+│   └── prompts.py              # System prompt & financial persona instructions
+├── data/                       # Baseline sandbox ledger records
+│   ├── transactions.csv        # Simulated historical transactions (June–Aug 2026)
+│   ├── bills.csv               # Recurring bill commitments
+│   ├── budgets.json            # Monthly category budget limits
+│   └── account.json            # Simulated baseline bank balances
+├── docs/                       # Technical & governance documentation
+│   ├── TECHNICAL.md            # Architecture, data flows, and state management
+│   ├── SECURITY.md             # Security self-assessment & adversarial matrices
+│   ├── FEATURES.md             # Complete Topic A capabilities index
+│   ├── USER_GUIDE.md           # First-time user manual & workspace tour
+│   ├── DEMO_SCRIPT.md          # 5-minute presentation script with fallbacks
+│   └── check_docs.py           # Automated documentation verification script
+├── eval/                       # Benchmark & scenario evaluation suite
+│   ├── run_eval.py             # Benchmark runner (31 evaluation cases)
+│   ├── run_scenarios.py        # Multi-step golden flows & adversarial suites
+│   └── results/                # Recorded evaluation runs (mock & live)
+└── tests/                      # Automated unit test suite (275 tests)
+```
 
-## How the safety model works
+---
 
-- Read tools run without approval.
-- The propose tool creates a pending change. It changes nothing.
-- The apply step runs only from the `/apply` command in your terminal, and only after you type exactly `yes`.
-- The model has no tool that can apply a change. A tool call to apply one is blocked, and the block is logged.
-- API keys are redacted from logs. Keep `.env` out of version control.
+## Running Tests & Evaluations
 
-## Limits
+All tests and evaluations run offline by default without requiring an active Gemini API key:
 
-- Data is simulated, and the balance is a sandbox figure.
-- Answers are informational. Recommendations are general suggestions, not professional financial advice.
-- If the model hits its step limit, the chat shows the fallback message as a normal answer.
-- The chat’s error message was tested with a simulated model failure, not a live rate-limit error.
+### Unit & Security Test Suite (Pytest)
+```bash
+python -m pytest -q
+```
+Executes all **275 tests** across **43 test files**, including validator boundary tests, permission enforcement checks, prompt injection defenses, and atomic store isolation.
+
+### Benchmark Evaluation Runner
+```bash
+python eval/run_eval.py
+```
+Executes the **31 cases** benchmark suite in offline mock mode (scoring 31 of 31 passed).
+
+### Multi-Step Scenario Harness
+```bash
+python eval/run_scenarios.py
+```
+Executes the **23 cases** stateful scenario suite, validating multi-step golden flows (`G1`–`G5`) and adversarial security scenarios (`ADV01`–`ADV18`).
+
+### Documentation Consistency Verification
+```bash
+python docs/check_docs.py
+```
+Validates that every referenced file path exists on disk and that all cited counts match the generated system baselines.
+
+---
+
+## Documentation Suite
+
+For deeper technical and operational insights, explore the four core documentation guides:
+
+1. [TECHNICAL.md](docs/TECHNICAL.md): Detailed architectural design, tool schemas, multi-session state isolation, and audit trail guarantees.
+2. [SECURITY.md](docs/SECURITY.md): Comprehensive security self-assessment, threat model, permission tiers, secret scanning report, and adversarial test results.
+3. [FEATURES.md](docs/FEATURES.md): Itemized inventory of every Topic A feature with code locations, example prompts, and test coverage.
+4. [USER_GUIDE.md](docs/USER_GUIDE.md): Practical user guide explaining how to navigate the 4 UI tabs, interpret "How I got this", and handle proposals.
+5. [DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md): Step-by-step 5-minute presentation script with contingency fallbacks.
+
+---
+
+## Deployment & Security Notes
+
+- **Cloud Hosting**: The live demonstration is hosted on Streamlit Community Cloud at https://ai-personal-finance-assistant-acceyufjoyulunmsa5rblo.streamlit.app/.
+- **Secrets Management**: Deployed credentials are managed through Streamlit Secrets (`st.secrets["GEMINI_API_KEY"]`), never exposed in client bundles or logged.
+- **Session Isolation**: Each visiting user operates within an isolated temporary workspace created under `workspaces/` via Python `ContextVar`, preventing cross-session data leakage.
+- **Zero Real Bank Connections**: The assistant operates strictly over sandbox data for the simulated horizon (June 1, 2026 to August 31, 2026). It cannot access external banking APIs or transfer real funds.
+- **Informational Scope**: Outputs are educational financial summaries and do not constitute certified financial or investment advice.

@@ -164,11 +164,19 @@ def main():
         print("ERROR: No generated numbers found. Run build_facts.py first.", file=sys.stderr)
         sys.exit(1)
 
-    # Identify documentation files to check (TECHNICAL.md primarily, and docs/*.md except generated)
+    # Identify documentation files to check (TECHNICAL.md, SECURITY.md, FEATURES.md, USER_GUIDE.md, DEMO_SCRIPT.md, README.md, etc.)
     docs_to_check = []
-    technical_md = DOCS_DIR / "TECHNICAL.md"
-    if technical_md.exists():
-        docs_to_check.append(technical_md)
+    core_docs = [
+        DOCS_DIR / "TECHNICAL.md",
+        DOCS_DIR / "SECURITY.md",
+        DOCS_DIR / "FEATURES.md",
+        DOCS_DIR / "USER_GUIDE.md",
+        DOCS_DIR / "DEMO_SCRIPT.md",
+        PROJECT_ROOT / "README.md",
+    ]
+    for c in core_docs:
+        if c.exists() and c not in docs_to_check:
+            docs_to_check.append(c)
 
     for md in DOCS_DIR.glob("*.md"):
         if md not in docs_to_check and md.is_file():
@@ -180,7 +188,8 @@ def main():
 
     total_errors = []
     for doc in docs_to_check:
-        print(f"Checking {doc.relative_to(PROJECT_ROOT)}...")
+        display_path = doc.name if doc == PROJECT_ROOT / "README.md" else doc.relative_to(PROJECT_ROOT)
+        print(f"Checking {display_path}...")
         doc_errors = check_document(doc, valid_numbers)
         if doc_errors:
             total_errors.extend(doc_errors)
