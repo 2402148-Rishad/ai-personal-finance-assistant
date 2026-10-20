@@ -26,6 +26,35 @@ except ImportError:
     from usage import check_and_increment_daily_cap, CAP_MESSAGE
 
 
+MONTH_NAMES = {
+    "01": "January", "02": "February", "03": "March", "04": "April",
+    "05": "May", "06": "June", "07": "July", "08": "August",
+    "09": "September", "10": "October", "11": "November", "12": "December"
+}
+
+
+def is_by_category_query(question: str) -> bool:
+    """Detect if a question is asking for spending broken down by category."""
+    q = question.lower()
+    has_by_cat_phrase = bool(re.search(r"\b(by\s+category|per\s+category|each\s+category|every\s+category|all\s+categories|category\s+breakdown|breakdown\s+by\s+category|breakdown\s+of\s+(?:my\s+)?spending|spending\s+breakdown)\b", q))
+    if has_by_cat_phrase:
+        return True
+    matched_single_cat = any(c.lower() in q for c in ["dining", "groceries", "transport", "health", "utilities", "shopping", "entertainment", "insurance", "rent", "subscriptions"])
+    if ("category" in q or "categories" in q) and ("spending" in q or "spent" in q):
+        if not matched_single_cat:
+            return True
+    return False
+
+
+def format_category_breakdown(by_cat: dict[str, Any], tot: float, month: str = "") -> str:
+    """Format category spending dictionary into descending lines with total."""
+    sorted_cats = sorted(by_cat.items(), key=lambda x: float(x[1]), reverse=True)
+    lines = [f"- {c}: ${float(amt):,.2f}" for c, amt in sorted_cats]
+    m_name = MONTH_NAMES.get(month[-2:], month) if month else ""
+    month_str = f" in {m_name}" if m_name else ""
+    return f"Your spending by category{month_str}:\n" + "\n".join(lines) + f"\n\nTotal: ${float(tot):,.2f}"
+
+
 def format_month_label(val: Any) -> str:
     """Format a period / date string into 'Month YYYY' (e.g. 'July 2026')."""
     s = str(val).strip()
@@ -456,6 +485,7 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
                     re.search(r"\b(combined\s+total|combined\s+spending|total\s+is|tell\s+me\s+the\s+total)\b", q_lower)
                     or ("total" in q_lower and any(c in q_lower for c in ["spending", "spent", "dining", "groceries"]))
                     or ("spending" in q_lower and "total" in q_lower)
+                    or is_by_category_query(question)
                 )
                 if not all_tool_calls and is_spending_total_query:
                     MONTH_MAP = {
@@ -488,16 +518,21 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
                             })
                             print(f"[Tool Call] spending_by_category({{'month': '{target_month}'}})")
                             by_cat = res_data.get("spending_by_category", {})
-                            mentioned_cats = [c for c in ["Dining", "Groceries", "Transport", "Health", "Utilities", "Shopping", "Entertainment"] if c.lower() in q_lower]
-                            if len(mentioned_cats) >= 2:
-                                checked_parts = []
-                                for c in mentioned_cats:
-                                    c_amt = float(by_cat.get(c, 0.0))
-                                    checked_parts.append(f"{c} ${c_amt:.2f}")
-                                answer = f"I checked these figures against your records: {', '.join(checked_parts)}."
+                            if is_by_category_query(question) and by_cat:
+                                tot = float(res_data.get("total_spent", sum(float(v) for v in by_cat.values())))
+                                m = res_data.get("month", target_month)
+                                answer = format_category_breakdown(by_cat, tot, m)
                             else:
-                                tot = res_data.get("total_spent", 0.0)
-                                answer = f"I checked these figures against your records: Total spending ${float(tot):.2f}."
+                                mentioned_cats = [c for c in ["Dining", "Groceries", "Transport", "Health", "Utilities", "Shopping", "Entertainment"] if c.lower() in q_lower]
+                                if len(mentioned_cats) >= 2:
+                                    checked_parts = []
+                                    for c in mentioned_cats:
+                                        c_amt = float(by_cat.get(c, 0.0))
+                                        checked_parts.append(f"{c} ${c_amt:.2f}")
+                                    answer = f"I checked these figures against your records: {', '.join(checked_parts)}."
+                                else:
+                                    tot = res_data.get("total_spent", 0.0)
+                                    answer = f"I checked these figures against your records: Total spending ${float(tot):.2f}."
                         else:
                             answer = "I checked these figures against your records."
                     else:
@@ -516,6 +551,7 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
                 find_sub_tc = next((tc for tc in all_tool_calls if tc.get("name") == "find_subscriptions"), None)
                 find_dup_tc = next((tc for tc in all_tool_calls if tc.get("name") in ("find_duplicates", "find_possible_duplicates")), None)
                 rescue_tc = next((tc for tc in all_tool_calls if tc.get("name") == "rescue_plan"), None)
+                s_cat_tc = next((tc for tc in all_tool_calls if tc.get("name") == "spending_by_category"), None)
 
                 if clarification_tc:
                     item_label = clarification_tc.get("item_label") or "expense"
@@ -674,6 +710,18 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
 
                             options_text = " ".join(opt_strs)
                             answer = f"Your balance drops to -${drop_amt:.2f} on {date_val}. Options: {options_text} {status_str}"
+                elif is_by_category_query(question) and s_cat_tc:
+                    r = s_cat_tc.get("result", {})
+                    if isinstance(r, str):
+                        try:
+                            r = json.loads(r)
+                        except Exception:
+                            r = {}
+                    by_cat = r.get("spending_by_category", {})
+                    if by_cat:
+                        tot = float(r.get("total_spent", sum(float(v) for v in by_cat.values())))
+                        m = r.get("month", "")
+                        answer = format_category_breakdown(by_cat, tot, m)
                 else:
                     has_revision = any(
                         tc.get("name") == "revise_proposal" and
@@ -757,12 +805,15 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
                         matched_cat = matched_cats[0] if matched_cats else None
 
                         is_total_spending_q = bool(
-                            re.search(r"\b(total\s+spending|spending\s+total|total\s+expenses|spend\s+in\s+total|spent\s+in\s+total|spend\s+total|spent\s+total)\b", q_lower_check)
-                            or (re.search(r"\b(how\s+much\s+did\s+i\s+spend|how\s+much\s+did\s+i\s+spend\s+in\s+total|spending|spent)\b", q_lower_check)
-                                and "total" in q_lower_check
-                                and not matched_cat and not is_income_q and not is_net_savings_q and not is_savings_rate_q and not is_over_budget_q)
-                            or (re.search(r"\b(how\s+much\s+did\s+i\s+spend|spending)\b", q_lower_check)
-                                and not matched_cat and not is_income_q and not is_net_savings_q and not is_savings_rate_q and not is_over_budget_q)
+                            (
+                                re.search(r"\b(total\s+spending|spending\s+total|total\s+expenses|spend\s+in\s+total|spent\s+in\s+total|spend\s+total|spent\s+total)\b", q_lower_check)
+                                or (re.search(r"\b(how\s+much\s+did\s+i\s+spend|how\s+much\s+did\s+i\s+spend\s+in\s+total|spending|spent)\b", q_lower_check)
+                                    and "total" in q_lower_check
+                                    and not matched_cat and not is_income_q and not is_net_savings_q and not is_savings_rate_q and not is_over_budget_q)
+                                or (re.search(r"\b(how\s+much\s+did\s+i\s+spend|spending)\b", q_lower_check)
+                                    and not matched_cat and not is_income_q and not is_net_savings_q and not is_savings_rate_q and not is_over_budget_q)
+                            )
+                            and not is_by_category_query(question)
                         )
 
                         # Match only the tool result corresponding to the question's metric
@@ -877,6 +928,16 @@ def run_agent(question: str, history: list | None = None) -> AgentResult:
                                             amt = sum(float(t.get("amount", 0)) for t in txs if str(t.get("category", "")).lower() == matched_cat.lower() and t.get("type") == "expense")
                                             break
                                 answer = f"Your {matched_cat.lower()} spending was ${amt:.2f} in {name}."
+
+                        elif is_by_category_query(question):
+                            s_cat_tc = next((tc for tc in all_tool_calls if tc.get("name") == "spending_by_category" and isinstance(tc.get("result"), dict)), None)
+                            if s_cat_tc:
+                                res = s_cat_tc.get("result", {})
+                                by_cat = res.get("spending_by_category", {})
+                                if by_cat:
+                                    tot = res.get("total_spent") or sum(float(v) for v in by_cat.values())
+                                    m = res.get("month", "")
+                                    answer = format_category_breakdown(by_cat, tot, m)
 
                         elif is_total_spending_q:
                             tot_tc = next((tc for tc in all_tool_calls if isinstance(tc.get("result"), dict) and ("total_spent" in tc.get("result") or "total_expenses" in tc.get("result"))), None)
