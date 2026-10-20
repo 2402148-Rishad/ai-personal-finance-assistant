@@ -2,7 +2,10 @@
 
 **Track**: International Track, Topic A (Personal Finance Assistant)  
 **Repository**: https://github.com/2402148-Rishad/ai-personal-finance-assistant  
-**Live Deployed Application**: https://ai-personal-finance-assistant-acceyufjoyulunmsa5rblo.streamlit.app/
+**Live Deployed Application**: https://ai-personal-finance-assistant-acceyufjoyulunmsa5rblo.streamlit.app/  
+**Demo Video**: [DEMO_VIDEO_URL]  
+**Presentation Deck**: [DECK_URL]  
+
 
 ---
 

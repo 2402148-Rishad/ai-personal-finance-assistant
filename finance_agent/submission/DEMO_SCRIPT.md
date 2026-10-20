@@ -139,10 +139,6 @@ Every prompt and result in this script is taken directly from the verified live 
 - **Presenter Strategy**: While retrying, demonstrate offline capabilities in **Overview** or **Ledger**.
 
 ### Fallback B: Daily Model-Call Cap Reached
-- **Mechanism**: When daily calls reach the cap (default 200 — from src/usage.py line 61, `get_model_daily_cap()` returns 200), the agent refuses further calls and returns the message quoted from src/usage.py lines 30–32 (used at src/agent.py lines 395–398):
-  ```python
-  CAP_MESSAGE = (
-      "The daily assistant limit is reached. Your ledger, plan, alerts and sandbox tools still work."
-  )
-  ```
+- **Mechanism**: When daily calls reach the cap (default 200 calls, configured in `src/usage.py`), the assistant informs the user that the daily limit has been reached and that ledger, plan, alerts, and sandbox tools remain available.
 - **Presenter Strategy**: Demonstrate that all offline navigation tabs (**Overview**, **Ledger**, **Plan**, **Inbox**) remain fully operational without model calls.
+

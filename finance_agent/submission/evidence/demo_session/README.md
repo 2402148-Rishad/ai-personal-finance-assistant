@@ -1,5 +1,7 @@
 # Live Demonstration Session Evidence
 
+The transcript was produced before commit dbc9a32. Its step 2 shows the old total-only reply. Commit dbc9a32 fixes that reply, and tests/test_phase88_category_reply.py covers it. Do not edit transcript.md.
+
 This directory contains the session artifacts and complete execution transcript for a scripted walkthrough of the `DEMO_SCRIPT.md` prompts through the agent pipeline with the live model.
 
 ## Run Metadata
